@@ -18,6 +18,12 @@ adafruit-circuitpython-max31856
 # for folks using sw spi (bit banging)
 adafruit-circuitpython-bitbangio
 
+# I2C OLED display (SSD1309 - uses luma.oled for proper voltage booster configuration)
+luma.oled
+
+# Image processing library for display graphics
+Pillow
+
 # untested - for PT100 platinum thermocouples
 #adafruit-circuitpython-max31865
 

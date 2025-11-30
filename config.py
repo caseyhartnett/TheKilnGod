@@ -20,8 +20,8 @@ listening_port = 8081
 # This is used to calculate a cost estimate before a run. It's also used
 # to produce the actual cost during a run. My kiln has three
 # elements that when my switches are set to high, consume 9460 watts.
-kwh_rate        = 0.1319  # cost per kilowatt hour per currency_type to calculate cost to run job
-kw_elements     = 9.460 # if the kiln elements are on, the wattage in kilowatts
+kwh_rate        = 0.1400  # cost per kilowatt hour per currency_type to calculate cost to run job
+kw_elements     = 14.300 # if the kiln elements are on, the wattage in kilowatts
 currency_type   = "$"   # Currency Symbol to show when calculating cost to run job
 
 ########################################################################
@@ -84,26 +84,26 @@ currency_type   = "$"   # Currency Symbol to show when calculating cost to run j
 
 try:
     import board
-    spi_sclk  = board.D17    #spi clock
-    spi_miso  = board.D27    #spi Microcomputer In Serial Out
-    spi_cs    = board.D22    #spi Chip Select
-    spi_mosi  = board.D10    #spi Microcomputer Out Serial In (not connected) 
-    gpio_heat = board.D23    #output that controls relay
-    gpio_heat_invert = False #invert the output state
+    spi_sclk  = board.D23    #spi clock
+    spi_miso  = board.D21    #spi Microcomputer In Serial Out
+    spi_cs    = board.D24    #spi Chip Select
+    spi_mosi  = board.D19    #spi Microcomputer Out Serial In (not connected) 
+    gpio_heat = board.D25    #output that controls relay
+    gpio_heat_invert = True #invert the output state
 except (NotImplementedError,AttributeError):
     print("not running on blinka recognized board, probably a simulation")
 
-#######################################
+#######################################C
 ### Thermocouple breakout boards
 #######################################
 # There are only two breakoutboards supported. 
 #   max31855 - only supports type K thermocouples
 #   max31856 - supports many thermocouples
-max31855 = 1
-max31856 = 0
+max31855 = 0
+max31856 = 1
 # uncomment these two lines if using MAX-31856
 import adafruit_max31856
-thermocouple_type = adafruit_max31856.ThermocoupleType.K
+thermocouple_type = adafruit_max31856.ThermocoupleType.S
 
 # here are the possible max-31856 thermocouple types
 #   ThermocoupleType.B
@@ -114,6 +114,15 @@ thermocouple_type = adafruit_max31856.ThermocoupleType.K
 #   ThermocoupleType.R
 #   ThermocoupleType.S
 #   ThermocoupleType.T
+
+#######################################
+### Display Configuration
+#######################################
+display_width = 128
+display_height = 64
+display_i2c_address = 0x3C
+display_i2c_port = 1
+display_enabled = True
 
 ########################################################################
 #
@@ -155,7 +164,7 @@ stop_integral_windup = True
 ########################################################################
 #
 #   Simulation parameters
-simulate = True
+simulate = False
 sim_t_env      = 65   # deg
 sim_c_heat     = 500.0  # J/K  heat capacity of heat element
 sim_c_oven     = 5000.0 # J/K  heat capacity of oven

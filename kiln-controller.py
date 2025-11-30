@@ -27,6 +27,7 @@ profile_path = config.kiln_profiles_directory
 
 from oven import SimulatedOven, RealOven, Profile
 from ovenWatcher import OvenWatcher
+from display_example import DisplayUpdater
 
 app = bottle.Bottle()
 
@@ -39,6 +40,14 @@ else:
 ovenWatcher = OvenWatcher(oven)
 # this ovenwatcher is used in the oven class for restarts
 oven.set_ovenwatcher(ovenWatcher)
+
+# Initialize and start display updater
+if getattr(config, 'display_enabled', True):
+    display_updater = DisplayUpdater(oven, update_interval=2.0)
+    display_updater.start()
+    log.info("Display updater started")
+else:
+    log.info("Display disabled in config")
 
 @app.route('/')
 def index():
