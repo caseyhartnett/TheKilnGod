@@ -102,8 +102,16 @@ except (NotImplementedError,AttributeError):
 max31855 = 0
 max31856 = 1
 # uncomment these two lines if using MAX-31856
-import adafruit_max31856
-thermocouple_type = adafruit_max31856.ThermocoupleType.S
+# Import conditionally to avoid errors when module is not installed
+thermocouple_type = None
+if max31856:
+    try:
+        import adafruit_max31856
+        thermocouple_type = adafruit_max31856.ThermocoupleType.S
+    except ImportError:
+        # Module not installed - this is OK if you're not using the thermocouple hardware
+        # The error will occur when actually trying to use it, not at import time
+        thermocouple_type = None
 
 # here are the possible max-31856 thermocouple types
 #   ThermocoupleType.B

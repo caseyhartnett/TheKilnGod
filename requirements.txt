@@ -1,3 +1,4 @@
+# Core web framework dependencies
 setuptools
 greenlet
 bottle
@@ -6,16 +7,23 @@ gevent-websocket
 websocket-client
 requests
 
+# Hardware GPIO support
 # for folks running raspberry pis
 # we have no proof of anyone using another board yet, but when that 
 # happens, you might want to comment this out.
 RPi.GPIO
 
+# Adafruit Blinka - provides CircuitPython compatibility
+# Required for board, digitalio, busio modules
+# Supports many boards (Raspberry Pi, BeagleBone, Jetson, etc.)
+adafruit-blinka
+
+# Thermocouple breakout boards
 # List of all supported adafruit modules for thermocouples
 adafruit-circuitpython-max31855
 adafruit-circuitpython-max31856
 
-# for folks using sw spi (bit banging)
+# Software SPI (bit banging) support
 adafruit-circuitpython-bitbangio
 
 # I2C OLED display (SSD1309 - uses luma.oled for proper voltage booster configuration)
@@ -24,6 +32,7 @@ luma.oled
 # Image processing library for display graphics
 Pillow
 
+# Optional/untested modules
 # untested - for PT100 platinum thermocouples
 #adafruit-circuitpython-max31865
 

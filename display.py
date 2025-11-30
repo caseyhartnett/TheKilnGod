@@ -8,8 +8,11 @@ Uses luma.oled library for proper SSD1309 support with correct voltage booster c
 from luma.core.interface.serial import i2c
 from luma.core.render import canvas
 from luma.oled.device import ssd1309
+from PIL import Image
 import logging
 import config
+import os
+import re
 
 log = logging.getLogger("kiln-controller.display")
 
@@ -183,6 +186,92 @@ class KilnDisplay:
                 draw.text((0, y_pos), message[:21], fill="white")  # Limit to 21 chars
         except Exception as e:
             log.error(f"Error showing message: {e}")
+    
+    @staticmethod
+    def load_icon_from_hex(icon_name):
+        """
+        Load an icon from a hex file in images/hex/ directory
+        
+        Args:
+            icon_name: Name of icon file (without .hex extension), e.g., 'flame', 'clock'
+        
+        Returns:
+            PIL Image object or None if file not found
+        """
+        # Get the project root directory (assuming display.py is in project root)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(script_dir, 'images', 'hex', f'{icon_name}.hex')
+        
+        if not os.path.exists(icon_path):
+            log.warning(f"Icon file not found: {icon_path}")
+            return None
+        
+        try:
+            with open(icon_path, 'r') as f:
+                hex_text = f.read()
+            
+            # Extract dimensions from comment
+            width, height = 16, 16  # defaults
+            dimension_pattern = r'(\d+)x(\d+)px'
+            for line in hex_text.split('\n'):
+                match = re.search(dimension_pattern, line, re.IGNORECASE)
+                if match:
+                    width = int(match.group(1))
+                    height = int(match.group(2))
+                    break
+            
+            # Remove comments and extract hex values
+            lines = [line for line in hex_text.split('\n') if not line.strip().startswith('//')]
+            hex_text = '\n'.join(lines)
+            hex_pattern = r'0x([0-9a-fA-F]+)'
+            matches = re.findall(hex_pattern, hex_text)
+            hex_data = [int(hex_val, 16) for hex_val in matches]
+            
+            # Convert hex data to image
+            expected_bytes = (width * height) // 8
+            if len(hex_data) != expected_bytes:
+                log.warning(f"Hex data size mismatch: expected {expected_bytes} bytes, got {len(hex_data)}")
+                # Pad or truncate as needed
+                if len(hex_data) < expected_bytes:
+                    hex_data.extend([0] * (expected_bytes - len(hex_data)))
+                else:
+                    hex_data = hex_data[:expected_bytes]
+            
+            # Create image
+            img = Image.new('1', (width, height), 0)
+            pixel_index = 0
+            for byte_val in hex_data:
+                for bit in range(7, -1, -1):  # MSB first
+                    if pixel_index >= width * height:
+                        break
+                    x = pixel_index % width
+                    y = pixel_index // width
+                    if byte_val & (1 << bit):
+                        img.putpixel((x, y), 1)
+                    pixel_index += 1
+            
+            return img
+            
+        except Exception as e:
+            log.error(f"Error loading icon {icon_name}: {e}")
+            return None
+    
+    def get_icon(self, icon_name):
+        """
+        Get an icon image for drawing
+        
+        Args:
+            icon_name: Name of icon file (without .hex extension), e.g., 'flame', 'clock'
+        
+        Returns:
+            PIL Image object if successful, None otherwise
+        
+        Example usage in canvas:
+            icon = display.get_icon('flame')
+            if icon:
+                draw.bitmap((x, y), icon, fill="white")
+        """
+        return self.load_icon_from_hex(icon_name)
 
 
 # Example usage function
