@@ -32,6 +32,9 @@ luma.oled
 # Image processing library for display graphics
 Pillow
 
+# UPSPack V3 Plus UART Communication
+pyserial
+
 # Optional/untested modules
 # untested - for PT100 platinum thermocouples
 #adafruit-circuitpython-max31865
