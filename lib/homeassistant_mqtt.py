@@ -39,7 +39,7 @@ class HomeAssistantMQTT(threading.Thread):
             
     def setup_mqtt(self):
         try:
-            self.client = mqtt.Client(self.client_id)
+            self.client = mqtt.Client(client_id=self.client_id, callback_api_version=mqtt.CallbackAPIVersion.VERSION1)
             
             if self.username and self.password:
                 self.client.username_pw_set(self.username, self.password)
@@ -109,6 +109,8 @@ class HomeAssistantMQTT(threading.Thread):
                         time_remaining = 0
                     
                     # Publish data to MQTT
+                    # log.debug(f"Publishing MQTT data: Temp={temperature}, State={oven_state}")
+                    log.info(f"Publishing to {self.topic_prefix}: Temp={temperature}, State={oven_state}")
                     self.publish("sensor/temperature/state", str(round(temperature, 2)))
                     self.publish("sensor/target_temperature/state", str(round(target, 2)))
                     self.publish("sensor/status/state", oven_state)
@@ -117,6 +119,8 @@ class HomeAssistantMQTT(threading.Thread):
                     self.publish("sensor/profile_name/state", profile_name)
                     self.publish("sensor/runtime/state", str(int(runtime)))
                     self.publish("sensor/heat_rate/state", str(round(heat_rate, 2)))
+                else:
+                    log.warning("MQTT not connected, skipping publish")
                 
                 # Sleep until next update
                 time.sleep(self.update_interval)

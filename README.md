@@ -140,6 +140,8 @@ The controller publishes the following sensors (prefixed with `kiln/` by default
 
 ### Home Assistant YAML Configuration
 
+You can verify the complete example configuration file in [docs/homeassistant_example.yaml](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/homeassistant_example.yaml).
+
 Add the following to your Home Assistant `configuration.yaml` to create sensors:
 
 ```yaml
@@ -147,12 +149,12 @@ mqtt:
   sensor:
     - name: "Kiln Temperature"
       state_topic: "kiln/sensor/temperature/state"
-      unit_of_measurement: "°C"  # or °F depending on your config
+      unit_of_measurement: "°F"  # Change to "°C" if your config.py temp_scale is "c"
       device_class: temperature
 
     - name: "Kiln Target Temperature"
       state_topic: "kiln/sensor/target_temperature/state"
-      unit_of_measurement: "°C"
+      unit_of_measurement: "°F"  # Change to "°C" if your config.py temp_scale is "c"
       device_class: temperature
 
     - name: "Kiln Status"
@@ -162,6 +164,17 @@ mqtt:
       state_topic: "kiln/sensor/time_remaining/state"
       unit_of_measurement: "s"
       
+    - name: "Kiln Profile"
+      state_topic: "kiln/sensor/profile_name/state"
+
+    - name: "Kiln Runtime"
+      state_topic: "kiln/sensor/runtime/state"
+      unit_of_measurement: "s"
+
+    - name: "Kiln Heat Rate"
+      state_topic: "kiln/sensor/heat_rate/state"
+      unit_of_measurement: "°/h"
+
   binary_sensor:
     - name: "Kiln Heat"
       state_topic: "kiln/binary_sensor/heat/state"
