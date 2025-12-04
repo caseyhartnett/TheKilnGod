@@ -28,6 +28,7 @@ profile_path = config.kiln_profiles_directory
 from oven import SimulatedOven, RealOven, Profile
 from ovenWatcher import OvenWatcher
 from display_example import DisplayUpdater
+from homeassistant_mqtt import HomeAssistantMQTT
 
 app = bottle.Bottle()
 
@@ -48,6 +49,14 @@ if getattr(config, 'display_enabled', True):
     log.info("Display updater started")
 else:
     log.info("Display disabled in config")
+
+# Initialize and start Home Assistant MQTT updater
+if getattr(config, 'ha_mqtt_enabled', False):
+    ha_mqtt = HomeAssistantMQTT(oven)
+    ha_mqtt.start()
+    log.info("Home Assistant MQTT updater started")
+else:
+    log.info("Home Assistant MQTT disabled in config")
 
 @app.route('/')
 def index():

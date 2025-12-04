@@ -132,6 +132,17 @@ display_i2c_address = 0x3C
 display_i2c_port = 1
 display_enabled = True
 
+#######################################
+### Home Assistant MQTT Configuration
+#######################################
+ha_mqtt_enabled = False
+ha_mqtt_broker = "192.168.1.100"
+ha_mqtt_port = 1883
+ha_mqtt_username = ""
+ha_mqtt_password = ""
+ha_mqtt_topic_prefix = "kiln"
+ha_mqtt_client_id = "kiln-controller"
+
 ########################################################################
 #
 # If your kiln is above the starting temperature of the schedule when you 

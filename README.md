@@ -108,6 +108,67 @@ If you're done playing around with simulations and want to deploy the code on a 
     interfacing options -> I2C -> Select Yes to enable (for OLED display)
     select reboot
 
+## Home Assistant Integration
+
+The controller includes MQTT support to integrate with Home Assistant. This allows you to monitor your kiln temperature, status, and firing progress directly from your Home Assistant dashboard.
+
+### Configuration
+
+In `config.py`, enable MQTT and configure your broker settings:
+
+```python
+ha_mqtt_enabled = True
+ha_mqtt_broker = "192.168.1.100"  # IP address of your MQTT broker
+ha_mqtt_port = 1883
+ha_mqtt_username = "your_username"  # Optional
+ha_mqtt_password = "your_password"  # Optional
+ha_mqtt_topic_prefix = "kiln"
+```
+
+### Published Sensors
+
+The controller publishes the following sensors (prefixed with `kiln/` by default):
+
+- `sensor/temperature/state`: Current kiln temperature
+- `sensor/target_temperature/state`: Target temperature
+- `sensor/status/state`: Current status (IDLE, RUNNING, PAUSED)
+- `binary_sensor/heat/state`: Heating element status (ON/OFF)
+- `sensor/time_remaining/state`: Time remaining in current profile (seconds)
+- `sensor/profile_name/state`: Name of active profile
+- `sensor/runtime/state`: Current runtime (seconds)
+- `sensor/heat_rate/state`: Current heating rate (degrees/hour)
+
+### Home Assistant YAML Configuration
+
+Add the following to your Home Assistant `configuration.yaml` to create sensors:
+
+```yaml
+mqtt:
+  sensor:
+    - name: "Kiln Temperature"
+      state_topic: "kiln/sensor/temperature/state"
+      unit_of_measurement: "°C"  # or °F depending on your config
+      device_class: temperature
+
+    - name: "Kiln Target Temperature"
+      state_topic: "kiln/sensor/target_temperature/state"
+      unit_of_measurement: "°C"
+      device_class: temperature
+
+    - name: "Kiln Status"
+      state_topic: "kiln/sensor/status/state"
+
+    - name: "Kiln Time Remaining"
+      state_topic: "kiln/sensor/time_remaining/state"
+      unit_of_measurement: "s"
+      
+  binary_sensor:
+    - name: "Kiln Heat"
+      state_topic: "kiln/binary_sensor/heat/state"
+      payload_on: "ON"
+      payload_off: "OFF"
+```
+
 ## Configuration
 
 All parameters are defined in config.py. You need to read through config.py carefully to understand each setting. Here are some of the most important settings:
