@@ -135,11 +135,11 @@ display_enabled = True
 #######################################
 ### Home Assistant MQTT Configuration
 #######################################
-ha_mqtt_enabled = False
-ha_mqtt_broker = "192.168.1.100"
+ha_mqtt_enabled = True
+ha_mqtt_broker = "10.0.0.250"
 ha_mqtt_port = 1883
-ha_mqtt_username = ""
-ha_mqtt_password = ""
+ha_mqtt_username = None
+ha_mqtt_password = None
 ha_mqtt_topic_prefix = "kiln"
 ha_mqtt_client_id = "kiln-controller"
 
@@ -305,3 +305,13 @@ kiln_profiles_directory = os.path.abspath(os.path.join(os.path.dirname( __file__
 # To prevent throttling, set throttle_percent to 100.
 throttle_below_temp = 300
 throttle_percent = 20
+
+########################################################################
+# Local Configuration Override
+########################################################################
+# This attempts to import from 'secrets.py' to override any settings above.
+# Use this for passwords, specific machine configuration, etc.
+try:
+    from secrets import *
+except ImportError:
+    pass

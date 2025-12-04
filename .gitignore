@@ -10,3 +10,4 @@ thumbs.db
 .idea/*
 state.json
 venv/*
+secrets.py

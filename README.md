@@ -108,22 +108,60 @@ If you're done playing around with simulations and want to deploy the code on a 
     interfacing options -> I2C -> Select Yes to enable (for OLED display)
     select reboot
 
+## Configuration
+
+All parameters are defined in `config.py`. You need to read through `config.py` carefully to understand each setting.
+
+### Secrets and Local Configuration
+
+Sensitive information (like MQTT passwords) or machine-specific configuration should be placed in a `secrets.py` file. This file is not tracked by git.
+
+1. Copy `secrets_example.py` to `secrets.py`:
+   ```bash
+   cp secrets_example.py secrets.py
+   ```
+
+2. Edit `secrets.py` with your local settings:
+   ```python
+   # secrets.py
+   ha_mqtt_username = "my_real_username"
+   ha_mqtt_password = "my_real_password"
+   
+   # You can override any other config setting here too
+   # ha_mqtt_broker = "192.168.1.50"
+   # simulate = False
+   ```
+
+Any variable defined in `secrets.py` will override the default value in `config.py`.
+
+### Important Settings
+
+| Variable | Default | Description |
+| -------- | ------- | ----------- |
+| sensor_time_wait | 2 seconds | It's the duty cycle for the entire system.  It's set to two seconds by default which means that a decision is made every 2s about whether to turn on relay[s] and for how long. If you use mechanical relays, you may want to increase this. At 2s, my SSR switches 11,000 times in 13 hours. |
+| temp_scale | f | f for farenheit, c for celcius |
+| pid parameters | | Used to tune your kiln. See PID Tuning. |
+| simulate | True | Simulate a kiln. Used to test the software by new users so they can check out the features. |
+| max31856 | 1 | Set to 1 to use MAX31856 thermocouple board (supports multiple thermocouple types), 0 for MAX31855 (K-type only) |
+| thermocouple_type | S | Thermocouple type when using MAX31856 (B, E, J, K, N, R, S, or T) |
+| display_enabled | True | Enable/disable the OLED display |
+| display_i2c_address | 0x3C | I2C address of the OLED display |
+| display_i2c_port | 1 | I2C port number (typically 1 on Raspberry Pi) |
+
 ## Home Assistant Integration
 
 The controller includes MQTT support to integrate with Home Assistant. This allows you to monitor your kiln temperature, status, and firing progress directly from your Home Assistant dashboard.
 
-### Configuration
+### Setup
 
-In `config.py`, enable MQTT and configure your broker settings:
+1. Ensure MQTT is enabled in `config.py` (or `secrets.py`):
+   ```python
+   ha_mqtt_enabled = True
+   ha_mqtt_broker = "192.168.1.100"
+   ha_mqtt_port = 1883
+   ```
 
-```python
-ha_mqtt_enabled = True
-ha_mqtt_broker = "192.168.1.100"  # IP address of your MQTT broker
-ha_mqtt_port = 1883
-ha_mqtt_username = "your_username"  # Optional
-ha_mqtt_password = "your_password"  # Optional
-ha_mqtt_topic_prefix = "kiln"
-```
+2. Set your MQTT username and password in `secrets.py` as described in the Configuration section above.
 
 ### Published Sensors
 
@@ -181,23 +219,6 @@ mqtt:
       payload_on: "ON"
       payload_off: "OFF"
 ```
-
-## Configuration
-
-All parameters are defined in config.py. You need to read through config.py carefully to understand each setting. Here are some of the most important settings:
-
-| Variable | Default | Description |
-| -------- | ------- | ----------- |
-| sensor_time_wait | 2 seconds | It's the duty cycle for the entire system.  It's set to two seconds by default which means that a decision is made every 2s about whether to turn on relay[s] and for how long. If you use mechanical relays, you may want to increase this. At 2s, my SSR switches 11,000 times in 13 hours. |
-| temp_scale | f | f for farenheit, c for celcius |
-| pid parameters | | Used to tune your kiln. See PID Tuning. |
-| simulate | True | Simulate a kiln. Used to test the software by new users so they can check out the features. |
-| max31856 | 1 | Set to 1 to use MAX31856 thermocouple board (supports multiple thermocouple types), 0 for MAX31855 (K-type only) |
-| thermocouple_type | S | Thermocouple type when using MAX31856 (B, E, J, K, N, R, S, or T) |
-| display_enabled | True | Enable/disable the OLED display |
-| display_i2c_address | 0x3C | I2C address of the OLED display |
-| display_i2c_port | 1 | I2C port number (typically 1 on Raspberry Pi) |
- 
 
 ## Testing
 

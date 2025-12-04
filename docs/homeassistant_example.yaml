@@ -1,0 +1,35 @@
+mqtt:
+  sensor:
+    - name: "Kiln Temperature"
+      state_topic: "kiln/sensor/temperature/state"
+      unit_of_measurement: "°F"  # Change to "°C" if your config.py temp_scale is "c"
+      device_class: temperature
+
+    - name: "Kiln Target Temperature"
+      state_topic: "kiln/sensor/target_temperature/state"
+      unit_of_measurement: "°F"  # Change to "°C" if your config.py temp_scale is "c"
+      device_class: temperature
+
+    - name: "Kiln Status"
+      state_topic: "kiln/sensor/status/state"
+
+    - name: "Kiln Time Remaining"
+      state_topic: "kiln/sensor/time_remaining/state"
+      unit_of_measurement: "s"
+      
+    - name: "Kiln Profile"
+      state_topic: "kiln/sensor/profile_name/state"
+
+    - name: "Kiln Runtime"
+      state_topic: "kiln/sensor/runtime/state"
+      unit_of_measurement: "s"
+
+    - name: "Kiln Heat Rate"
+      state_topic: "kiln/sensor/heat_rate/state"
+      unit_of_measurement: "°/h"
+
+  binary_sensor:
+    - name: "Kiln Heat"
+      state_topic: "kiln/binary_sensor/heat/state"
+      payload_on: "ON"
+      payload_off: "OFF"
