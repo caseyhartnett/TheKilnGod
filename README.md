@@ -46,7 +46,7 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/breadboard.png) | Breadboard | breadboard, ribbon cable, connector for pi's gpio pins & connecting wires |
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ssr.png) | Solid State Relay | Zero crossing, make sure it can handle the max current of your kiln. Even if the kiln is 220V you can buy a single [3 Phase SSR](https://www.auberins.com/index.php?main_page=product_info&cPath=2_30&products_id=331). It's like having 3 SSRs in one.  Relays this big always require a heat sink. |
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ks-1018.png) | Electric Kiln | There are many old electric kilns on the market that don't have digital controls. You can pick one up on the used market cheaply.  This controller will work with 110V or 220V (pick a proper SSR). My kiln is a Skutt KS-1018. |
-| | SSD1309 OLED Display | 128x64 pixel monochrome OLED display connected via I2C. Displays real-time temperature, target temperature, kiln state, profile information, and time. Optional but recommended for local status monitoring. |
+| ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ssd1309.png) | [SSD1309 OLED Display](https://www.amazon.com/dp/B0FRMFTZLB?ref_=ppx_hzsearch_conn_dt_b_fed_asin_title_4) | 128x64 pixel monochrome OLED display connected via I2C. Displays real-time temperature, target temperature, kiln state, profile information, and time. Optional but recommended for local status monitoring. |
 
 ### Pin Configuration
 
@@ -241,6 +241,13 @@ test the OLED display with:
 or test image display functionality with:
 
      $ python test_image_display.py
+
+This script now supports testing specific animations and icons:
+
+     $ python test_image_display.py --test all      # Run all tests (default)
+     $ python test_image_display.py --test icons    # Show static icons (flame, clock, etc.)
+     $ python test_image_display.py --test logo     # Show Kiln God logo animation
+     $ python test_image_display.py --test pottery  # Show Pottery flame animation
 
 and you can use this script to examine each pin's state including input/output/voltage on your board:
 
