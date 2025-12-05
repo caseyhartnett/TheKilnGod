@@ -29,15 +29,24 @@ from oven import SimulatedOven, RealOven, Profile
 from ovenWatcher import OvenWatcher
 from display_example import DisplayUpdater
 from homeassistant_mqtt import HomeAssistantMQTT
+from buzzer import Buzzer
 
 app = bottle.Bottle()
+
+# Initialize buzzer (only for real oven)
+buzzer = None
+if not config.simulate:
+    try:
+        buzzer = Buzzer()
+    except Exception as e:
+        log.warning(f"Failed to initialize buzzer: {e}")
 
 if config.simulate == True:
     log.info("this is a simulation")
     oven = SimulatedOven()
 else:
     log.info("this is a real kiln")
-    oven = RealOven()
+    oven = RealOven(buzzer=buzzer)
 ovenWatcher = OvenWatcher(oven)
 # this ovenwatcher is used in the oven class for restarts
 oven.set_ovenwatcher(ovenWatcher)
@@ -359,13 +368,37 @@ def get_config():
         "currency_type": config.currency_type})    
 
 def main():
+    # Play startup sound
+    if buzzer:
+        try:
+            buzzer.startup()
+        except Exception as e:
+            log.warning(f"Failed to play startup sound: {e}")
+    
     ip = "0.0.0.0"
     port = config.listening_port
     log.info("listening on %s:%d" % (ip, port))
 
-    server = WSGIServer((ip, port), app,
-                        handler_class=WebSocketHandler)
-    server.serve_forever()
+    try:
+        server = WSGIServer((ip, port), app,
+                            handler_class=WebSocketHandler)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        log.info("Shutting down...")
+        if buzzer:
+            try:
+                buzzer.cleanup()
+            except:
+                pass
+    except Exception as e:
+        log.error(f"Fatal error: {e}")
+        # Play error sound on crash
+        if buzzer:
+            try:
+                buzzer.error()
+            except:
+                pass
+        raise
 
 
 if __name__ == "__main__":

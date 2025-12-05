@@ -90,8 +90,13 @@ try:
     spi_mosi  = board.D19    #spi Microcomputer Out Serial In (not connected) 
     gpio_heat = board.D7    #output that controls relay
     gpio_heat_invert = True #invert the output state
+
+    # Buzzer Configuration
+    gpio_buzzer = 12        # BCM pin for piezo buzzer
+    gpio_buzzer = 12        # BCM pin for piezo buzzer
 except (NotImplementedError,AttributeError):
     print("not running on blinka recognized board, probably a simulation")
+    gpio_buzzer = 12        # BCM pin for piezo buzzer
 
 #######################################C
 ### Thermocouple breakout boards

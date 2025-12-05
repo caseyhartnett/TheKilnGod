@@ -326,11 +326,12 @@ class Max31856(TempSensorReal):
 class Oven(threading.Thread):
     '''parent oven class. this has all the common code
        for either a real or simulated oven'''
-    def __init__(self):
+    def __init__(self, buzzer=None):
         threading.Thread.__init__(self)
         self.daemon = True
         self.temperature = 0
         self.time_step = config.sensor_time_wait
+        self.buzzer = buzzer
         self.reset()
 
     def reset(self):
@@ -377,6 +378,12 @@ class Oven(threading.Thread):
 
     def run_profile(self, profile, startat=0, allow_seek=True):
         log.debug('run_profile run on thread' + threading.current_thread().name)
+        
+        # Play start sound
+        if self.buzzer:
+            # Run in separate thread to not block
+            threading.Thread(target=self.buzzer.start_firing).start()
+
         runtime = startat * 60
         if allow_seek:
             if self.state == 'IDLE':
@@ -393,8 +400,15 @@ class Oven(threading.Thread):
         self.state = "RUNNING"
         log.info("Running schedule %s starting at %d minutes" % (profile.name,startat))
         log.info("Starting")
+        
+        # Play start firing sound
+        if hasattr(self, 'buzzer') and self.buzzer:
+            self.buzzer.start_firing()
 
-    def abort_run(self):
+    def abort_run(self, emergency=False):
+        # Play manual stop sound only if not an emergency (emergency already played error sound)
+        if not emergency and hasattr(self, 'buzzer') and self.buzzer:
+            self.buzzer.manual_stop()
         self.reset()
         self.save_automatic_restart_state()
 
@@ -438,18 +452,27 @@ class Oven(threading.Thread):
             config.emergency_shutoff_temp):
             log.info("emergency!!! temperature too high")
             if config.ignore_temp_too_high == False:
-                self.abort_run()
+                # Play error sound before aborting
+                if hasattr(self, 'buzzer') and self.buzzer:
+                    self.buzzer.error()
+                self.abort_run(emergency=True)
         
         if self.board.temp_sensor.status.over_error_limit():
             log.info("emergency!!! too many errors in a short period")
             if config.ignore_tc_too_many_errors == False:
-                self.abort_run()
+                # Play error sound before aborting
+                if hasattr(self, 'buzzer') and self.buzzer:
+                    self.buzzer.error()
+                self.abort_run(emergency=True)
 
     def reset_if_schedule_ended(self):
         if self.runtime > self.totaltime:
             log.info("schedule ended, shutting down")
             log.info("total cost = %s%.2f" % (config.currency_type,self.cost))
-            self.abort_run()
+            # Play completion sound before aborting
+            if hasattr(self, 'buzzer') and self.buzzer:
+                self.buzzer.firing_complete()
+            self.abort_run(emergency=False)
 
     def update_cost(self):
         if self.heat:
@@ -679,13 +702,13 @@ class SimulatedOven(Oven):
 
 class RealOven(Oven):
 
-    def __init__(self):
+    def __init__(self, buzzer=None):
         self.board = RealBoard()
         self.output = Output()
         self.reset()
 
         # call parent init
-        Oven.__init__(self)
+        Oven.__init__(self, buzzer)
 
         # start thread
         self.start()

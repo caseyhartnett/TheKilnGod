@@ -24,6 +24,7 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
   * support for a watcher to page you via slack if you kiln is out of whack
   * easy scheduling of future kiln runs
   * optional SSD1309 OLED display for local status monitoring (temperature, target, state, profile, time)
+  * optional passive piezo buzzer for audio feedback (startup, start/stop firing, completion, errors)
 
 
 **Run Kiln Schedule**
@@ -47,6 +48,7 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ssr.png) | Solid State Relay | Zero crossing, make sure it can handle the max current of your kiln. Even if the kiln is 220V you can buy a single [3 Phase SSR](https://www.auberins.com/index.php?main_page=product_info&cPath=2_30&products_id=331). It's like having 3 SSRs in one.  Relays this big always require a heat sink. |
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ks-1018.png) | Electric Kiln | There are many old electric kilns on the market that don't have digital controls. You can pick one up on the used market cheaply.  This controller will work with 110V or 220V (pick a proper SSR). My kiln is a Skutt KS-1018. |
 | ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/ssd1309.png) | [SSD1309 OLED Display](https://www.amazon.com/dp/B0FRMFTZLB?ref_=ppx_hzsearch_conn_dt_b_fed_asin_title_4) | 128x64 pixel monochrome OLED display connected via I2C. Displays real-time temperature, target temperature, kiln state, profile information, and time. Optional but recommended for local status monitoring. |
+| | Passive Piezo Buzzer | Passive piezo buzzer (PWM compatible). Connect positive leg to GPIO 12 and negative leg to Ground. Provides audio alerts for system events. |
 
 ### Pin Configuration
 
@@ -66,6 +68,9 @@ The current default pin configuration (as defined in `config.py`) uses:
 - I2C SCL: Standard I2C pin (BCM pin 3 on Raspberry Pi)
 - I2C Address: 0x3C
 - I2C Port: 1
+
+**Audio:**
+- GPIO Buzzer: BCM pin 12
 
 **Note:** You can use either hardware SPI or software SPI for the thermocouple. If you define SPI pins in `config.py`, software SPI will be used. If no pins are defined, hardware SPI will be used. See the [config](https://github.com/caseyhartnett/TheKilnGod/blob/main/config.py) file for details and to customize pin assignments.
 
