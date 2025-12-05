@@ -280,6 +280,12 @@ If you want to schedule a kiln run to start in the future. Here are [examples](h
 
 If you're busy and do not want to sit around watching the web interface for problems, there is a watcher.py script which you can run on any machine in your local network or even on the raspberry pi which will watch the kiln-controller process to make sure it is running a schedule, and staying within a pre-defined temperature range. When things go bad, it sends messages to a slack channel you define. I have alerts set on my android phone for that specific slack channel. Here are detailed [instructions](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/watcher.md).
 
+## Known Issues
+
+### Drop and Hold Profile Resume
+When using profiles with a "Drop and Hold" segment (steep cooling immediately after a peak), be aware of a limitation in the automatic restart logic. If the controller restarts (e.g., power loss) during the cooling drop, the resume logic may find an earlier time in the schedule that matches the current temperature during the heat-up phase. This can cause the kiln to re-fire the peak temperature.
+**Workaround:** If a failure occurs during the drop, do not rely on auto-resume. Manually start the profile at the appropriate time index for the hold segment.
+
 ## License
 
 This program is free software: you can redistribute it and/or modify
