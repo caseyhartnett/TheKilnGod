@@ -6,6 +6,7 @@
   display: flex;
   flex-direction: row;
   align-items: center;
+  flex-wrap: wrap;
   width: max-content;
   font-family: sans-serif;
   margin: 4px;
@@ -44,4 +45,58 @@
   text-align: center;
   color: #0000CC;
   font-size: 20pt;
+}
+
+/* Mobile Responsive Styles */
+@media screen and (max-width: 768px) {
+  .container {
+    width: 100%;
+    max-width: 100%;
+  }
+  
+  .stat {
+    font-size: 28pt;
+  }
+  
+  .stattxt {
+    font-size: 28pt;
+    padding: 5px;
+  }
+  
+  .top {
+    font-size: 14pt;
+    padding: 3px;
+  }
+  
+  .bottom {
+    font-size: 16pt;
+    padding: 3px;
+  }
+}
+
+@media screen and (max-width: 480px) {
+  .stat {
+    font-size: 20pt;
+  }
+  
+  .stattxt {
+    font-size: 20pt;
+    padding: 4px;
+    margin: 1px;
+  }
+  
+  .top {
+    font-size: 12pt;
+    padding: 2px;
+  }
+  
+  .bottom {
+    font-size: 14pt;
+    padding: 2px;
+  }
+  
+  .container {
+    padding: 3px;
+    margin: 3px;
+  }
 }

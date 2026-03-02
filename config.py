@@ -88,8 +88,8 @@ try:
     spi_miso  = board.D21    #spi Microcomputer In Serial Out
     spi_cs    = board.D24    #spi Chip Select
     spi_mosi  = board.D19    #spi Microcomputer Out Serial In (not connected) 
-    gpio_heat = board.D7    #output that controls relay
-    gpio_heat_invert = True #invert the output state
+    gpio_heat = board.D16    #output that controls relay
+    gpio_heat_invert = False #invert the output state
 
     # Buzzer Configuration
     gpio_buzzer = 12        # BCM pin for piezo buzzer
@@ -163,6 +163,16 @@ seek_start = True
 # on & off and for how long. The thermocouple is read 
 # temperature_average_samples times during and the average value is used.
 sensor_time_wait = 2
+
+########################################################################
+#
+# minimum on-time protection in seconds
+#
+# Prevents rapid on/off cycling by requiring a minimum on-time.
+# If the calculated on-time is less than this value, the heater will
+# remain off for the entire duty cycle. This protects relays and
+# prevents excessive switching. Set to 0 to disable.
+min_on_time = 0.5  # seconds
 
 
 ########################################################################

@@ -408,3 +408,300 @@ body {
     overflow-x: hidden;
     overflow-y: hidden;
 }
+
+/* Mobile Responsive Styles */
+@media screen and (max-width: 768px) {
+    #status {
+        height: auto;
+        overflow: hidden;
+    }
+    
+    .ds-title-panel {
+        display: flex;
+        flex-wrap: wrap;
+    }
+    
+    .ds-panel {
+        display: flex;
+        flex-wrap: wrap;
+    }
+    
+    /* Titles: First row - Sensor Temp, Target Temp, Heat Rate */
+    .ds-title-panel .ds-title:nth-child(1),
+    .ds-title-panel .ds-title:nth-child(2),
+    .ds-title-panel .ds-title:nth-child(3) {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        font-size: 9px;
+        border-right: 1px solid #b9b6af;
+        box-sizing: border-box;
+    }
+    
+    .ds-title-panel .ds-title:nth-child(3) {
+        border-right: none;
+    }
+    
+    /* Titles: Second row - Cost and Status */
+    .ds-title-panel .ds-title:nth-child(4),
+    .ds-title-panel .ds-title.ds-state {
+        flex: 0 0 50%;
+        max-width: 50%;
+        font-size: 9px;
+        border-top: 1px solid #b9b6af;
+        border-right: 1px solid #b9b6af;
+        box-sizing: border-box;
+    }
+    
+    .ds-title-panel .ds-title.ds-state {
+        border-right: none;
+    }
+    
+    /* Displays: First row - Sensor Temp, Target Temp, Heat Rate */
+    .ds-panel > .display.ds-num:first-child {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        order: 1;
+        font-size: 28px;
+        border-right: 1px solid #b9b6af;
+        box-sizing: border-box;
+    }
+    
+    .ds-panel > .display.ds-num.ds-target {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        order: 2;
+        font-size: 28px;
+        border-right: 1px solid #b9b6af;
+        box-sizing: border-box;
+    }
+    
+    .ds-panel > .display.ds-num.ds-heat-rate {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        order: 3;
+        font-size: 28px;
+        border-right: none;
+        box-sizing: border-box;
+    }
+    
+    /* Displays: Second row - Cost and Status text */
+    .ds-panel > .display.ds-cost {
+        flex: 0 0 50%;
+        max-width: 50%;
+        order: 4;
+        font-size: 24px;
+        border-top: 1px solid #b9b6af;
+        border-right: 1px solid #b9b6af;
+        box-sizing: border-box;
+    }
+    
+    .ds-panel > .display.ds-text {
+        flex: 0 0 50%;
+        max-width: 50%;
+        order: 5;
+        font-size: 24px;
+        border-top: 1px solid #b9b6af;
+        border-right: none;
+        box-sizing: border-box;
+    }
+    
+    .display {
+        font-size: 28px;
+        height: 50px;
+        line-height: 50px;
+    }
+    
+    /* LED indicators row - full width */
+    .ds-panel > .display.ds-state:last-child {
+        flex: 0 0 100%;
+        max-width: 100%;
+        order: 6;
+        width: 100% !important;
+        margin-top: 5px;
+        padding-top: 5px;
+        border-top: 1px solid #b9b6af;
+        clear: both;
+        box-sizing: border-box;
+    }
+    
+    .ds-led {
+        font-size: 32px;
+        width: 20%;
+        min-width: 40px;
+        box-sizing: border-box;
+    }
+    
+    .ds-unit {
+        font-size: 18px;
+        line-height: 28px;
+    }
+    
+    .select2-container {
+        width: 100% !important;
+        margin-bottom: 5px;
+    }
+    
+    #profile_selector {
+        width: 100%;
+        margin-bottom: 5px;
+    }
+    
+    .panel-heading {
+        padding: 8px;
+    }
+    
+    #btn_controls {
+        width: 100%;
+        margin-top: 5px;
+        text-align: center;
+    }
+    
+    #btn_controls .btn-group {
+        width: 100%;
+    }
+    
+    #btn_controls .btn {
+        width: 48%;
+        margin: 1%;
+    }
+    
+    .graph {
+        height: 250px;
+    }
+    
+    .modal-dialog {
+        margin: 10px;
+        width: auto;
+    }
+    
+    .modal-body td {
+        font-size: 14px;
+        word-break: break-word;
+    }
+    
+    #edit .input-group {
+        margin-bottom: 10px;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    /* Titles: First row - Sensor Temp, Target Temp, Heat Rate */
+    .ds-title-panel .ds-title:nth-child(1),
+    .ds-title-panel .ds-title:nth-child(2),
+    .ds-title-panel .ds-title:nth-child(3) {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        font-size: 8px;
+        padding: 2px;
+    }
+    
+    /* Titles: Second row - Cost and Status */
+    .ds-title-panel .ds-title:nth-child(4),
+    .ds-title-panel .ds-title.ds-state {
+        flex: 0 0 50%;
+        max-width: 50%;
+        font-size: 8px;
+        padding: 2px;
+    }
+    
+    /* Displays: First row - Sensor Temp, Target Temp, Heat Rate */
+    .ds-panel > .display.ds-num:first-child {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        font-size: 24px;
+    }
+    
+    .ds-panel > .display.ds-num.ds-target {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        font-size: 24px;
+    }
+    
+    .ds-panel > .display.ds-num.ds-heat-rate {
+        flex: 0 0 33.33%;
+        max-width: 33.33%;
+        font-size: 24px;
+    }
+    
+    /* Displays: Second row - Cost and Status text */
+    .ds-panel > .display.ds-cost {
+        flex: 0 0 50%;
+        max-width: 50%;
+        font-size: 20px;
+    }
+    
+    .ds-panel > .display.ds-text {
+        flex: 0 0 50%;
+        max-width: 50%;
+        font-size: 20px;
+    }
+    
+    .display {
+        font-size: 24px;
+        height: 45px;
+        line-height: 45px;
+    }
+    
+    .ds-led {
+        font-size: 28px;
+        width: 20%;
+        min-width: 35px;
+    }
+    
+    .ds-unit {
+        font-size: 16px;
+        line-height: 24px;
+    }
+    
+    .graph {
+        height: 200px;
+    }
+}
+
+/* Profile Table Styles */
+#profile_table th:first-child {
+    width: 50px;
+}
+
+#profile_table .profile-table-time {
+    width: 60px;
+}
+
+#profile_table .profile-table-temp {
+    width: 60px;
+}
+
+#profile_table .profile-table-slope {
+    width: 100px;
+}
+
+@media screen and (max-width: 768px) {
+    #profile_table th:first-child {
+        width: auto;
+        min-width: 40px;
+    }
+    
+    #profile_table .profile-table-time,
+    #profile_table .profile-table-temp,
+    #profile_table .profile-table-slope {
+        width: 100%;
+        max-width: 150px;
+    }
+    
+    #profile_table table {
+        font-size: 12px;
+    }
+}
+
+@media screen and (max-width: 480px) {
+    #profile_table .profile-table-time,
+    #profile_table .profile-table-temp,
+    #profile_table .profile-table-slope {
+        width: 100%;
+        max-width: 100px;
+    }
+    
+    #profile_table table {
+        font-size: 11px;
+    }
+}

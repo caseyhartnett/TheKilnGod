@@ -159,7 +159,7 @@ class TempSensorReal(TempSensor):
     def run(self):
         while True:
             temp = self.get_temperature()
-            if temp:
+            if temp is not None:  # Fixed: Changed from 'if temp:' to handle 0° as valid temperature
                 self.temptracker.add(temp)
             time.sleep(self.sleeptime)
 
@@ -489,6 +489,11 @@ class Oven(threading.Thread):
             # this happens at start-up with a simulated oven
             temp = 0
             pass
+        except Exception as e:
+            # Catch all other exceptions that might occur when reading temperature
+            # This prevents temp from staying at 0 when other errors occur
+            log.error(f"Error reading temperature in get_state(): {e}")
+            temp = 0
 
         self.set_heat_rate(self.runtime,temp)
 
@@ -724,6 +729,24 @@ class RealOven(Oven):
 
         heat_on = float(self.time_step * pid)
         heat_off = float(self.time_step * (1 - pid))
+
+        # Minimum on-time protection: if heat_on is less than minimum,
+        # round it down to 0 to prevent rapid cycling.
+        # Exception: Allow throttled heating (intentional low power operation)
+        # to bypass the minimum to prevent blocking legitimate throttling.
+        # Throttling occurs when: target <= throttle_below_temp, error is large (outside PID window),
+        # and PID output matches throttle percentage.
+        current_temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
+        error = self.target - current_temp
+        is_throttled = (config.throttle_below_temp and config.throttle_percent and 
+                       self.target <= config.throttle_below_temp and
+                       error > config.pid_control_window and
+                       abs(pid - (config.throttle_percent/100.0)) < 0.01)
+        
+        if config.min_on_time > 0 and 0 < heat_on < config.min_on_time and not is_throttled:
+            log.debug(f"heat_on ({heat_on:.3f}s) below minimum ({config.min_on_time}s), setting to 0")
+            heat_off = self.time_step  # entire cycle is off
+            heat_on = 0.0
 
         # self.heat is for the front end to display if the heat is on
         self.heat = 0.0
