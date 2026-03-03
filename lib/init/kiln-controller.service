@@ -5,7 +5,7 @@ Description=kiln-controller
 Type=simple
 User=__RUN_USER__
 WorkingDirectory=__REPO_DIR__
-ExecStart=__REPO_DIR__/venv/bin/python __REPO_DIR__/kiln-controller.py
+ExecStart=__REPO_DIR__/thekilngod server
 Restart=on-failure
 RestartSec=2
 

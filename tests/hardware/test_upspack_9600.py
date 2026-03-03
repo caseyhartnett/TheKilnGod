@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.hardware
+
 #!/usr/bin/env python
 import time
 import sys
@@ -117,4 +121,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

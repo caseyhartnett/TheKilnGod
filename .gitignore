@@ -10,6 +10,8 @@ thumbs.db
 .idea/*
 state.json
 venv/*
+.venv/*
 secrets.py
 ui-v2/node_modules/
 public/v2/
+*.egg-info/

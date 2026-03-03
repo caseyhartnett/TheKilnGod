@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.hardware
+
 #!/usr/bin/env python
 """
 Test script to display icons and animations on SSD1309 display

@@ -24,7 +24,7 @@ If you're using a breadboard with a labeled break-out board, verify:
 I thought at one point that I had fried my RPi.  I needed to verify that it
 still worked as expected.  Here's what I did to verify GPIO on my pi.
 
-```source venv/bin/activate; ./gpioreadall.py```
+```source venv/bin/activate; ./thekilngod gpio-readall```
 
 and you'll get output that looks something like this...
 
@@ -76,7 +76,7 @@ This will show you the output of gpio readall every 2 seconds. This way you can 
 moving a wire to each gpio pin and then look up to verify **V** has changed as you expect without
 having to type.
 
-```watch ./gpioreadall.py```
+```watch ./thekilngod gpio-readall```
 
 * connect a 3V3 pin in series to a 1k ohm resistor
 * connect the other end of the resistor to each gpio pin one at a time

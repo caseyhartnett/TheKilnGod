@@ -1,4 +1,4 @@
-Migrating from Old to New kiln-controller Code
+Migrating from Old to New TheKilnGod Code
 ==========
 
 This describes how to migrate from the old version of the code to the new.
@@ -32,7 +32,7 @@ FIXME - need instructions on branch names to checkout etc.
   3. Install all the libraries that the new code uses
 
 ```
-cd kiln-controller
+cd TheKilnGod
 source venv/bin/activate
 pip install -r ./requirements.txt
 ```
@@ -61,7 +61,7 @@ pip install -r ./requirements.txt
   5. test the thermocouple board and thermocouple
 
 ```
-  ./test-thermocouple.py
+  ./thekilngod test thermocouple
 ```
 
   You should see that **software spi** is configured. You should see the pin configuration printed out. You should see the temperature reported every second.
@@ -69,9 +69,8 @@ pip install -r ./requirements.txt
   4. test output
 
 ```
-  ./test-output.py
+  ./thekilngod test output
 ```
 
   Every 5 seconds, verify the output is flipped from on to off or vice versa.
-
 

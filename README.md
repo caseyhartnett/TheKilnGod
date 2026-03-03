@@ -5,7 +5,7 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 
 ## Features
 
-  * supports [many boards](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/supported-boards.md) into addition to raspberry pi
+  * supports [many boards](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/supported_boards.md) into addition to raspberry pi
   * supports Adafruit MAX31856 and MAX31855 thermocouple boards
   * support for K, J, N, R, S, T, E, or B type thermocouples
   * easy to create new kiln schedules and edit / modify existing schedules
@@ -116,6 +116,13 @@ Download [Raspberry PI OS](https://www.raspberrypi.org/software/). Use Rasberry 
     $ python3 -m venv venv
     $ source venv/bin/activate
     $ pip install -r requirements.txt
+    $ pip install -e .
+
+For development tooling (ruff, mypy, pytest, pre-commit):
+
+    $ pip install -r requirements-dev.txt
+
+Dependency source of truth is `pyproject.toml`; `requirements*.txt` are thin convenience entrypoints.
 
 *Note: The above steps work on ubuntu if you prefer*
 
@@ -165,10 +172,10 @@ For security, keep sensitive values (passwords/tokens) in `secrets.py`, which ov
 | api_control_token | None | Optional token to require for control commands on POST /api via `X-API-Token` header |
 | api_monitor_token | None | Optional token to require for monitoring endpoints (`/api/stats`, `/status`, `/config`, `/storage`) |
 | command_audit_enabled | True | Enable JSON-lines command audit logging |
-| command_audit_log_file | `<repo>/command-audit.log` | Audit log file path for control/storage actions |
+| command_audit_log_file | `<repo>/storage/logs/command-audit.log` | Audit log file path for control/storage actions |
 | run_health_history_enabled | True | Enable per-run health summary logging |
-| run_health_history_file | `<repo>/run-health-history.jsonl` | JSON-lines run health history used for trend charting |
-| run_health_exclusions_file | `<repo>/run-health-exclusions.json` | JSON list of run IDs excluded from health trend analysis |
+| run_health_history_file | `<repo>/storage/logs/run-health-history.jsonl` | JSON-lines run health history used for trend charting |
+| run_health_exclusions_file | `<repo>/storage/logs/run-health-exclusions.json` | JSON list of run IDs excluded from health trend analysis |
 
 ## Home Assistant Integration
 
@@ -250,40 +257,40 @@ After you've completed connecting all the hardware together, there are scripts t
 
 then test the thermocouple with:
 
-     $ ./test-thermocouple.py
+     $ ./thekilngod test thermocouple
 
 then test the output with:
 
-     $ ./test-output.py
+     $ ./thekilngod test output
 
 test the OLED display with:
 
-     $ python test_display.py
+     $ ./thekilngod test display
 
 ## Run Health Trends
 
 To plot long-term run health/aging indicators across firings:
 
 ```bash
-python3 run-health-trends.py
+./thekilngod run-health
 ```
 
-See [docs/run-health.md](docs/run-health.md) for details.
+See [docs/run_health.md](docs/run_health.md) for details.
 
 or test image display functionality with:
 
-     $ python test_image_display.py
+     $ ./thekilngod test image-display
 
 This script now supports testing specific animations and icons:
 
-     $ python test_image_display.py --test all      # Run all tests (default)
-     $ python test_image_display.py --test icons    # Show static icons (flame, clock, etc.)
-     $ python test_image_display.py --test logo     # Show Kiln God logo animation
-     $ python test_image_display.py --test pottery  # Show Pottery flame animation
+     $ ./thekilngod test image-display --test all      # Run all tests (default)
+     $ ./thekilngod test image-display --test icons    # Show static icons (flame, clock, etc.)
+     $ ./thekilngod test image-display --test logo     # Show Kiln God logo animation
+     $ ./thekilngod test image-display --test pottery  # Show Pottery flame animation
 
 and you can use this script to examine each pin's state including input/output/voltage on your board:
 
-     $ ./gpioreadall.py
+     $ ./thekilngod gpio-readall
 
 ## PID Tuning
 
@@ -293,9 +300,13 @@ There is a state view that can help with tuning. It shows the P,I, and D paramet
 
 ## Usage
 
+Unified CLI entrypoint:
+
+    $ ./thekilngod --help
+
 ### Server Startup
 
-    $ source venv/bin/activate; ./kiln-controller.py
+    $ source venv/bin/activate; ./thekilngod server
 
 ### Autostart Server onBoot
 If you want the server to autostart on boot, run the following command:
@@ -317,7 +328,7 @@ If you want to schedule a kiln run to start in the future. Here are [examples](h
 
 ### Watcher
 
-If you're busy and do not want to sit around watching the web interface for problems, there is a watcher.py script which you can run on any machine in your local network or even on the raspberry pi which will watch the kiln-controller process to make sure it is running a schedule, and staying within a pre-defined temperature range. When things go bad, it sends messages to a slack channel you define. I have alerts set on my android phone for that specific slack channel. Here are detailed [instructions](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/watcher.md).
+If you're busy and do not want to sit around watching the web interface for problems, there is a watcher utility which you can run on any machine in your local network or even on the raspberry pi which will watch the controller server process to make sure it is running a schedule, and staying within a pre-defined temperature range. When things go bad, it sends messages to a slack channel you define. I have alerts set on my android phone for that specific slack channel. Here are detailed [instructions](https://github.com/caseyhartnett/TheKilnGod/blob/main/docs/watcher.md).
 
 ## Known Issues
 

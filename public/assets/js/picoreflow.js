@@ -48,6 +48,10 @@ graph.live =
 
 function updateProfile(id)
 {
+    id = parseInt(id, 10);
+    if (isNaN(id) || id < 0 || id >= profiles.length) {
+        return;
+    }
     selected_profile = id;
     selected_profile_name = profiles[id].name;
     var job_seconds = profiles[id].data.length === 0 ? 0 : parseInt(profiles[id].data[profiles[id].data.length-1][0]);
@@ -59,6 +63,37 @@ function updateProfile(id)
     $('#sel_prof_cost').html(kwh + ' kWh ('+ currency_type +': '+ cost +')');
     graph.profile.data = profiles[id].data;
     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ] , getOptions());
+    updateSelectedProfilePreview(profiles[id], job_time);
+}
+
+function formatDisplayTemp(value) {
+    if (typeof value === 'undefined' || value === null || isNaN(value)) {
+        return '--';
+    }
+    return parseInt(value, 10) + '°' + temp_scale_display;
+}
+
+function updateSelectedProfilePreview(profile, runtimeText)
+{
+    if (!profile) {
+        return;
+    }
+    var points = profile.data || [];
+    var startTemp = points.length ? points[0][1] : null;
+    var endTemp = points.length ? points[points.length-1][1] : null;
+    var peakTemp = null;
+    for (var i=0; i<points.length; i++) {
+        if (peakTemp === null || points[i][1] > peakTemp) {
+            peakTemp = points[i][1];
+        }
+    }
+
+    $('#preview_profile_name').text(profile.name || '---');
+    $('#preview_runtime').text(runtimeText || '--:--:--');
+    $('#preview_points').text(points.length);
+    $('#preview_start_temp').text(formatDisplayTemp(startTemp));
+    $('#preview_peak_temp').text(formatDisplayTemp(peakTemp));
+    $('#preview_end_temp').text(formatDisplayTemp(endTemp));
 }
 
 function deleteProfile()
@@ -131,7 +166,7 @@ function updateProfileTable()
     $('#profile_table').html(html);
 
     //Link table to graph
-    $(".form-control").change(function(e)
+    $("#profile_table .form-control").change(function(e)
         {
             var id = $(this)[0].id; //e.currentTarget.attributes.id
             var value = parseInt($(this)[0].value);
@@ -152,6 +187,100 @@ function updateProfileTable()
             updateProfileTable();
 
         });
+}
+
+function setBuilderUnits() {
+    $('#builder_unit_start').text(temp_scale_display);
+    $('#builder_unit_target').text(temp_scale_display);
+    $('#builder_unit_rate').text(temp_scale_display);
+}
+
+function addBuilderRow(target, rate, hold) {
+    var t = (typeof target !== 'undefined') ? target : '';
+    var r = (typeof rate !== 'undefined') ? rate : '';
+    var h = (typeof hold !== 'undefined') ? hold : 0;
+    var row = ''
+        + '<tr>'
+        + '<td><input type="number" class="form-control builder-target" value="' + t + '" /></td>'
+        + '<td><input type="number" class="form-control builder-rate" value="' + r + '" min="0" /></td>'
+        + '<td><input type="number" class="form-control builder-hold" value="' + h + '" min="0" /></td>'
+        + '<td><button type="button" class="btn btn-xs btn-danger" onclick="$(this).closest(\'tr\').remove();">Remove</button></td>'
+        + '</tr>';
+    $('#builder_segments_body').append(row);
+}
+
+function removeBuilderRow() {
+    var rows = $('#builder_segments_body tr');
+    if (rows.length > 0) {
+        rows.last().remove();
+    }
+}
+
+function initializeBuilderDefaults() {
+    if ($('#builder_segments_body tr').length > 0) {
+        return;
+    }
+    addBuilderRow(250, 200, 0);
+    addBuilderRow(1000, 350, 20);
+    addBuilderRow(1830, 150, 15);
+    addBuilderRow(1400, 300, 0);
+}
+
+function applyBuilderSchedule() {
+    var startTemp = parseFloat($('#builder_start_temp').val());
+    if (isNaN(startTemp)) {
+        $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> Enter a valid start temperature.", {
+            ele: 'body', type: 'error', offset: {from: 'top', amount: 250}, align: 'center', width: 385, delay: 3500, allow_dismiss: true, stackup_spacing: 10
+        });
+        return;
+    }
+
+    var pointsData = [[0, Math.round(startTemp)]];
+    var currentTemp = startTemp;
+    var currentTime = 0;
+    var badRow = false;
+
+    $('#builder_segments_body tr').each(function() {
+        var target = parseFloat($(this).find('.builder-target').val());
+        var ramp = parseFloat($(this).find('.builder-rate').val());
+        var hold = parseFloat($(this).find('.builder-hold').val());
+
+        if (isNaN(target)) {
+            return;
+        }
+        if (isNaN(hold) || hold < 0) {
+            hold = 0;
+        }
+
+        if (target !== currentTemp) {
+            if (isNaN(ramp) || ramp <= 0) {
+                badRow = true;
+                return false;
+            }
+            var rampSeconds = Math.abs(target - currentTemp) / ramp * 3600.0;
+            currentTime += rampSeconds;
+            pointsData.push([Math.round(currentTime), Math.round(target)]);
+            currentTemp = target;
+        }
+
+        if (hold > 0) {
+            currentTime += hold * 60.0;
+            pointsData.push([Math.round(currentTime), Math.round(target)]);
+        }
+    });
+
+    if (badRow || pointsData.length < 2) {
+        $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> Builder needs at least one valid segment with ramp rate.", {
+            ele: 'body', type: 'error', offset: {from: 'top', amount: 250}, align: 'center', width: 430, delay: 4000, allow_dismiss: true, stackup_spacing: 10
+        });
+        return;
+    }
+
+    graph.profile.data = pointsData;
+    graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    updateProfileTable();
+    $('#profile_table').slideDown();
+    $('.schedule-tabs a[href="#schedule_points_tab"]').tab('show');
 }
 
 function timeProfileFormatter(val, down) {
@@ -251,6 +380,7 @@ function enterNewMode()
     $('#status').slideUp();
     $('#edit').show();
     $('#profile_selector').hide();
+    $('#selected_profile_preview').hide();
     $('#btn_controls').hide();
     $('#form_profile_name').attr('value', '');
     $('#form_profile_name').attr('placeholder', 'Please enter a name');
@@ -258,6 +388,9 @@ function enterNewMode()
     graph.profile.draggable = true;
     graph.profile.data = [];
     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    initializeBuilderDefaults();
+    setBuilderUnits();
+    $('.schedule-tabs a[href="#schedule_builder_tab"]').tab('show');
     updateProfileTable();
 }
 
@@ -267,12 +400,16 @@ function enterEditMode()
     $('#status').slideUp();
     $('#edit').show();
     $('#profile_selector').hide();
+    $('#selected_profile_preview').hide();
     $('#btn_controls').hide();
     console.log(profiles);
     $('#form_profile_name').val(profiles[selected_profile].name);
     graph.profile.points.show = true;
     graph.profile.draggable = true;
     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    initializeBuilderDefaults();
+    setBuilderUnits();
+    $('.schedule-tabs a[href="#schedule_points_tab"]').tab('show');
     updateProfileTable();
     toggleTable();
 }
@@ -284,12 +421,14 @@ function leaveEditMode()
     state="IDLE";
     $('#edit').hide();
     $('#profile_selector').show();
+    $('#selected_profile_preview').show();
     $('#btn_controls').show();
     $('#status').slideDown();
     $('#profile_table').slideUp();
     graph.profile.points.show = false;
     graph.profile.draggable = false;
     graph.plot = $.plot("#graph_container", [ graph.profile, graph.live ], getOptions());
+    $('.schedule-tabs a[href="#schedule_points_tab"]').tab('show');
 }
 
 function newPoint()
@@ -613,6 +752,7 @@ $(document).ready(function()
             $('#act_temp_scale').html('º'+temp_scale_display);
             $('#target_temp_scale').html('º'+temp_scale_display);
             $('#heat_rate_temp_scale').html('º'+temp_scale_display);
+            setBuilderUnits();
 
             switch(time_scale_profile){
                 case "s":
@@ -624,6 +764,10 @@ $(document).ready(function()
                 case "h":
                     time_scale_long = "Hours";
                     break;
+            }
+
+            if (profiles.length > 0 && selected_profile >= 0 && selected_profile < profiles.length) {
+                updateSelectedProfilePreview(profiles[selected_profile], $('#sel_prof_eta').text());
             }
 
         }
@@ -720,7 +864,9 @@ $(document).ready(function()
 
         $("#e2").on("change", function(e)
         {
-            updateProfile(e.val);
+            // Select2 event payload differs between versions; fallback to input value.
+            var selected = (e && typeof e.val !== 'undefined') ? e.val : $(this).val();
+            updateProfile(selected);
         });
 
     }

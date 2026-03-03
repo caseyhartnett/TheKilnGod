@@ -1,0 +1,141 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thekilngod"
+version = "0.1.0"
+description = "Kiln controller and tooling"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "bottle",
+  "gevent",
+  "gevent-websocket",
+  "greenlet",
+  "requests",
+  "websocket-client",
+  "RPi.GPIO; platform_system == 'Linux' and (platform_machine == 'armv7l' or platform_machine == 'aarch64')",
+  "adafruit-blinka",
+  "adafruit-circuitpython-max31855",
+  "adafruit-circuitpython-max31856",
+  "adafruit-circuitpython-bitbangio",
+  "luma.oled",
+  "Pillow",
+  "pyserial",
+  "paho-mqtt",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy",
+  "pre-commit",
+  "pytest",
+  "ruff",
+  "types-requests",
+]
+
+[project.scripts]
+thekilngod = "thekilngod.cli:main"
+thekilngod-server = "thekilngod.controller:main"
+thekilngod-run-health-trends = "thekilngod.run_health_trends:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+src = ["src", "tests", "scripts"]
+extend-exclude = [
+  "config.py",
+  "lib",
+  "display.py",
+  "display_example.py",
+  "secrets_example.py",
+  "tests/hardware",
+  "scripts/gpio_readall.py",
+  "scripts/test_output.py",
+  "scripts/test_thermocouple.py",
+]
+
+[tool.ruff.lint]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "C4",
+  "SIM",
+  "RET",
+  "RUF",
+  "D",
+  "ANN",
+]
+ignore = [
+  "D100", # module docstring requirement is too noisy in legacy files
+  "D104", # package docstring requirement is too noisy during migration
+  "ANN401", # allow `Any` at external JSON boundaries
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["D", "ANN"]
+"scripts/**/*.py" = ["D", "ANN"]
+"src/thekilngod/display.py" = ["D", "ANN"]
+"src/thekilngod/display_updater.py" = ["D", "ANN"]
+"src/thekilngod/homeassistant_mqtt.py" = ["D", "ANN"]
+"src/thekilngod/notifications.py" = ["D", "ANN"]
+"scripts/kiln_logger.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF"]
+"scripts/kiln_tuner.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF"]
+"scripts/watcher.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF"]
+"src/thekilngod/controller.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF", "D", "ANN"]
+"src/thekilngod/oven.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF", "D", "ANN"]
+"src/thekilngod/oven_watcher.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF", "D", "ANN"]
+"src/thekilngod/buzzer.py" = ["E", "F", "I", "UP", "B", "C4", "SIM", "RET", "RUF", "D", "ANN"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+  "thekilngod.display",
+  "thekilngod.display_updater",
+  "thekilngod.homeassistant_mqtt",
+  "thekilngod.notifications",
+  "thekilngod.oven_watcher",
+  "thekilngod.buzzer",
+]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+check_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["thekilngod.controller"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["thekilngod.oven"]
+ignore_errors = true
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-m 'not hardware' --ignore=tests/hardware"
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+  "hardware: marks tests that require hardware or board-specific dependencies",
+]

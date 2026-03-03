@@ -24,13 +24,19 @@ api_monitor_token = None
 
 # Command audit log (JSON lines). Tracks control actions for post-run review.
 command_audit_enabled = True
-command_audit_log_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'command-audit.log'))
+command_audit_log_file = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "command-audit.log")
+)
 
 # Run health history (JSON lines). Used for between-run trend analysis and
 # early detection of kiln element performance degradation.
 run_health_history_enabled = True
-run_health_history_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'run-health-history.jsonl'))
-run_health_exclusions_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'run-health-exclusions.json'))
+run_health_history_file = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "run-health-history.jsonl")
+)
+run_health_exclusions_file = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "run-health-exclusions.json")
+)
 
 # Optional push notifications.
 # Supported provider: "ntfy"

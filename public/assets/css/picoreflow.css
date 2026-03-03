@@ -296,6 +296,38 @@ body {
     box-shadow: 0 0 1.1em 0 rgba(0,0,0,0.05),inset 0 0 0 0 #000;
 }
 
+.schedule-tabs > li > a {
+    padding: 6px 10px;
+}
+
+.schedule-tab-content {
+    background: rgba(255, 255, 255, 0.75);
+    border: 1px solid #d5d5d5;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    padding: 10px;
+}
+
+.builder-table {
+    margin-bottom: 8px;
+}
+
+.builder-table th {
+    font-size: 12px;
+}
+
+@media (max-width: 768px) {
+    .builder-controls .btn-group {
+        width: 100%;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .builder-controls .btn-group .btn {
+        flex: 1 1 auto;
+    }
+}
+
 .select2-container {
     position: relative;
     top: -3px;

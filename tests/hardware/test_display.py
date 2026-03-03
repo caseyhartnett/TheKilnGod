@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.hardware
+
 #!/usr/bin/env python
 """
 Simple test script to verify SSD1309 display is working
