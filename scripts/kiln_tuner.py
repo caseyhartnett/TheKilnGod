@@ -1,38 +1,44 @@
 #!/usr/bin/env python
+"""Collect tuning telemetry and estimate PID constants from kiln response."""
 
+from __future__ import annotations
+
+import argparse
+import csv
 import os
 import sys
-import csv
 import time
-import argparse
 
 try:
-        sys.dont_write_bytecode = True
-        import config
-        sys.dont_write_bytecode = False
+    sys.dont_write_bytecode = True
+    import config
+
+    sys.dont_write_bytecode = False
 
 except ImportError:
-        print("Could not import config file.")
-        print("Copy config.py.EXAMPLE to config.py and adapt it for your setup.")
-        exit(1)
+    print("Could not import config file.")
+    print("Copy config.py.EXAMPLE to config.py and adapt it for your setup.")
+    exit(1)
 
 
-def recordprofile(csvfile, targettemp):
+def recordprofile(csvfile: str, targettemp: float) -> None:
+    """Record kiln heat/cool response used for Ziegler-Nichols estimation."""
 
     script_dir = os.path.dirname(os.path.realpath(__file__))
-    sys.path.insert(0, script_dir + '/lib/')
+    repo_dir = os.path.abspath(os.path.join(script_dir, ".."))
+    sys.path.insert(0, os.path.join(repo_dir, "lib"))
 
     from oven import RealOven, SimulatedOven
 
     # open the file to log data to
-    f = open(csvfile, 'w')
+    f = open(csvfile, "w")
     csvout = csv.writer(f)
-    csvout.writerow(['time', 'temperature'])
+    csvout.writerow(["time", "temperature"])
 
     # construct the oven
     if config.simulate:
         oven = SimulatedOven()
-        oven.target = targettemp * 2 # insures max heating for simulation
+        oven.target = targettemp * 2  # insures max heating for simulation
     else:
         oven = RealOven()
 
@@ -45,20 +51,18 @@ def recordprofile(csvfile, targettemp):
     #
     # We record the temperature every config.sensor_time_wait
     try:
-
         # heating to target of 400F
         temp = 0
         sleepfor = config.sensor_time_wait
         stage = "heating"
-        while(temp <= targettemp):
+        while temp <= targettemp:
             if config.simulate:
                 oven.heat_then_cool()
             else:
                 oven.output.heat(sleepfor)
-            temp = oven.board.temp_sensor.temperature() + \
-                config.thermocouple_offset
-            
-            print("stage = %s, actual = %.2f, target = %.2f" % (stage,temp,targettemp))
+            temp = oven.board.temp_sensor.temperature() + config.thermocouple_offset
+
+            print("stage = %s, actual = %.2f, target = %.2f" % (stage, temp, targettemp))
             csvout.writerow([time.time(), temp])
             f.flush()
 
@@ -66,15 +70,14 @@ def recordprofile(csvfile, targettemp):
         stage = "cooling"
         if config.simulate:
             oven.target = 0
-        while(temp >= targettemp):
+        while temp >= targettemp:
             if config.simulate:
                 oven.heat_then_cool()
             else:
                 oven.output.cool(sleepfor)
-            temp = oven.board.temp_sensor.temperature() + \
-                config.thermocouple_offset
-            
-            print("stage = %s, actual = %.2f, target = %.2f" % (stage,temp,targettemp))
+            temp = oven.board.temp_sensor.temperature() + config.thermocouple_offset
+
+            print("stage = %s, actual = %.2f, target = %.2f" % (stage, temp, targettemp))
             csvout.writerow([time.time(), temp])
             f.flush()
 
@@ -85,17 +88,27 @@ def recordprofile(csvfile, targettemp):
             oven.output.cool(0)
 
 
-def line(a, b, x):
+def line(a: float, b: float, x: float) -> float:
+    """Return y on a line, used by tuner geometry calculations."""
     return a * x + b
 
 
-def invline(a, b, y):
+def invline(a: float, b: float, y: float) -> float:
+    """Return x on a line for given y, inverse of `line`."""
     return (y - b) / a
 
 
-def plot(xdata, ydata,
-         tangent_min, tangent_max, tangent_slope, tangent_offset,
-         lower_crossing_x, upper_crossing_x):
+def plot(
+    xdata,
+    ydata,
+    tangent_min,
+    tangent_max,
+    tangent_slope,
+    tangent_offset,
+    lower_crossing_x,
+    upper_crossing_x,
+):
+    """Render a visualization of tangent and crossing points for manual review."""
     from matplotlib import pyplot
 
     minx = min(xdata)
@@ -105,20 +118,26 @@ def plot(xdata, ydata,
 
     pyplot.scatter(xdata, ydata)
 
-    pyplot.plot([minx, maxx], [miny, miny], '--', color='purple')
-    pyplot.plot([minx, maxx], [maxy, maxy], '--', color='purple')
+    pyplot.plot([minx, maxx], [miny, miny], "--", color="purple")
+    pyplot.plot([minx, maxx], [maxy, maxy], "--", color="purple")
 
-    pyplot.plot(tangent_min[0], tangent_min[1], 'v', color='red')
-    pyplot.plot(tangent_max[0], tangent_max[1], 'v', color='red')
-    pyplot.plot([minx, maxx], [line(tangent_slope, tangent_offset, minx), line(tangent_slope, tangent_offset, maxx)], '--', color='red')
+    pyplot.plot(tangent_min[0], tangent_min[1], "v", color="red")
+    pyplot.plot(tangent_max[0], tangent_max[1], "v", color="red")
+    pyplot.plot(
+        [minx, maxx],
+        [line(tangent_slope, tangent_offset, minx), line(tangent_slope, tangent_offset, maxx)],
+        "--",
+        color="red",
+    )
 
-    pyplot.plot([lower_crossing_x, lower_crossing_x], [miny, maxy], '--', color='black')
-    pyplot.plot([upper_crossing_x, upper_crossing_x], [miny, maxy], '--', color='black')
+    pyplot.plot([lower_crossing_x, lower_crossing_x], [miny, maxy], "--", color="black")
+    pyplot.plot([upper_crossing_x, upper_crossing_x], [miny, maxy], "--", color="black")
 
     pyplot.show()
 
 
-def calculate(filename, tangentdivisor, showplot):
+def calculate(filename: str, tangentdivisor: float, showplot: bool) -> None:
+    """Compute PID seed constants from recorded tuning data."""
     # parse the csv file
     xdata = []
     ydata = []
@@ -126,8 +145,8 @@ def calculate(filename, tangentdivisor, showplot):
     with open(filename) as f:
         for row in csv.DictReader(f):
             try:
-                time = float(row['time'])
-                temp = float(row['temperature'])
+                time = float(row["time"])
+                temp = float(row["temperature"])
                 if filemintime is None:
                     filemintime = time
 
@@ -175,28 +194,47 @@ def calculate(filename, tangentdivisor, showplot):
     print("pid_ki = %s" % (1 / Ki))
     print("pid_kd = %s" % (Kd))
 
-
     if showplot:
-        plot(xdata, ydata,
-             tangent_min, tangent_max, tangent_slope, tangent_offset,
-             lower_crossing_x, upper_crossing_x)
+        plot(
+            xdata,
+            ydata,
+            tangent_min,
+            tangent_max,
+            tangent_slope,
+            tangent_offset,
+            lower_crossing_x,
+            upper_crossing_x,
+        )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Kiln tuner')
-    parser.add_argument('-c', '--calculate_only', action='store_true')
-    parser.add_argument('-t', '--target_temp', type=float, default=400, help="Target temperature")
-    parser.add_argument('-d', '--tangent_divisor', type=float, default=8, help="Adjust the tangent calculation to fit better. Must be >= 2 (default 8).")
-    parser.add_argument('-s', '--showplot', action='store_true', help="draw plot so you can see tanget line and possibly change")
+    parser = argparse.ArgumentParser(description="Kiln tuner")
+    parser.add_argument("-c", "--calculate_only", action="store_true")
+    parser.add_argument("-t", "--target_temp", type=float, default=400, help="Target temperature")
+    parser.add_argument(
+        "-d",
+        "--tangent_divisor",
+        type=float,
+        default=8,
+        help="Adjust the tangent calculation to fit better. Must be >= 2 (default 8).",
+    )
+    parser.add_argument(
+        "-s",
+        "--showplot",
+        action="store_true",
+        help="draw plot so you can see tanget line and possibly change",
+    )
     args = parser.parse_args()
 
-    csvfile = "tuning.csv"
+    csvfile = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "storage", "tuning.csv")
+    )
     target = args.target_temp
     if config.temp_scale.lower() == "c":
-        target = (target - 32)*5/9
-    tangentdivisor = args.tangent_divisor 
+        target = (target - 32) * 5 / 9
+    tangentdivisor = args.tangent_divisor
 
-    # default behavior is to record profile to csv file tuning.csv
+    # default behavior is to record profile to storage/tuning.csv
     # and then calculate pid values and print them
     if args.calculate_only:
         calculate(csvfile, tangentdivisor, args.showplot)

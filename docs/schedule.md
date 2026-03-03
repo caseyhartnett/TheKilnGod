@@ -35,7 +35,7 @@ Start a glaze firing in 15 minutes and start a kiln watcher. This is really usef
 
     at now +15 minutes <<END
     curl -d '{"cmd":"run", "profile":"cone-6-long-glaze"}' -H "Content-Type: application/json" -X POST http://0.0.0.0:8081/api
-    source ~/kiln-controller/venv/bin/activate; ~/kiln-controller/watcher.jbruce.py
+    source ~/TheKilnGod/venv/bin/activate; ~/TheKilnGod/thekilngod watcher
     END
 
 Start a biscuit fire at 1a tomorrow, but skip the first two hours [120 minutes] of candling because I know my wares are dry. Start a kiln watcher 15 minutes later to give the kiln time to reach temperature so the watcher does not page me. 
@@ -44,7 +44,7 @@ Start a biscuit fire at 1a tomorrow, but skip the first two hours [120 minutes] 
     curl -d '{"cmd":"run", "profile":"cone-05-long-bisque","startat":120}' -H "Content-Type: application/json" -X POST http://0.0.0.0:8081/api
     END
     at 1:15am tomorrow <<END
-    source ~/kiln-controller/venv/bin/activate; ~/kiln-controller/watcher.jbruce.py
+    source ~/TheKilnGod/venv/bin/activate; ~/TheKilnGod/thekilngod watcher
     END
 
 Stop any running firing at 3pm tomorrow:

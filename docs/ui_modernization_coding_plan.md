@@ -51,8 +51,8 @@ Why:
 
 ### Files
 
-- `lib/oven.py`
-- `kiln-controller.py`
+- `src/thekilngod/oven.py`
+- `src/thekilngod/controller.py`
 
 ### Tasks
 
@@ -165,4 +165,3 @@ Why:
 3. Introduce `ui-v2` in parallel path.
 4. Keep legacy UI as fallback through several firings.
 5. Cut over when stable and trusted.
-

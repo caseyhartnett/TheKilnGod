@@ -2,8 +2,8 @@
 
 The controller now writes per-run health summaries to:
 
-- `run-health-history.jsonl` (configurable with `run_health_history_file`)
-- optional exclusions in `run-health-exclusions.json` (configurable with `run_health_exclusions_file`)
+- `storage/logs/run-health-history.jsonl` (configurable with `run_health_history_file`)
+- optional exclusions in `storage/logs/run-health-exclusions.json` (configurable with `run_health_exclusions_file`)
 
 Each line is a JSON object with metrics useful for long-term element aging detection, including:
 
@@ -29,7 +29,7 @@ If those trends increase together over many runs, element performance may be dec
 Use:
 
 ```bash
-python3 run-health-trends.py
+./thekilngod run-health
 ```
 
 Output:
@@ -39,13 +39,13 @@ Output:
 Summary-only mode:
 
 ```bash
-python3 run-health-trends.py --print-only
+./thekilngod run-health --print-only
 ```
 
 Include excluded runs:
 
 ```bash
-python3 run-health-trends.py --include-excluded
+./thekilngod run-health --include-excluded
 ```
 
 If plotting fails, install matplotlib:

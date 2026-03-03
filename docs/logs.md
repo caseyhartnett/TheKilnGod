@@ -20,11 +20,18 @@ Logs from the app on the pi go to **/var/log/daemon.log** and look like this...
 |total_time | total seconds for schedule |
 |time_left | seconds left till the end of schedule|
 
+App-managed JSON/CSV logs are stored under `storage/logs/`:
+
+- `storage/logs/command-audit.log`
+- `storage/logs/run-health-history.jsonl`
+- `storage/logs/run-health-exclusions.json`
+- `storage/logs/kiln-stats.csv` (default output for `thekilngod logger`)
+
 
 If you need to send kiln logs to someone for troubleshooting:
 
 ```
-cd kiln-controller
+cd TheKilnGod
 ./ziplogs
 ```
 

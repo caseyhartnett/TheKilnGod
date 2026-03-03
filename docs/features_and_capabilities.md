@@ -10,16 +10,16 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
 
 ## High-Level System Summary
 
-- **Runtime/controller process**: `kiln-controller.py` (Bottle web framework + Gevent WebSocket)
-- **Core kiln logic and PID loop**: `lib/oven.py`
+- **Runtime/controller process**: `thekilngod server` (Bottle web framework + Gevent WebSocket)
+- **Core kiln logic and PID loop**: `src/thekilngod/oven.py`
 - **Configuration**: `config.py` with optional local `secrets.py` overrides
 - **Browser UI**: `public/index.html` + `public/assets/js/picoreflow.js`
 - **Advanced state dashboard**: `public/state.html` + `public/assets/js/state.js`
 - **Persistent profiles**: `storage/profiles/*.json`
-- **Local OLED display**: `display.py` (driver) + `display_example.py` (integration thread)
-- **Home Assistant integration**: `lib/homeassistant_mqtt.py`
-- **External watcher/alerts**: `watcher.py` (Standalone script, Slack webhook)
-- **Data capture and tuning**: `kiln-logger.py`, `kiln-tuner.py`
+- **Local OLED display**: `src/thekilngod/display.py` (driver) + `src/thekilngod/display_updater.py` (integration thread)
+- **Home Assistant integration**: `src/thekilngod/homeassistant_mqtt.py`
+- **External watcher/alerts**: `thekilngod watcher` (Standalone script, Slack webhook)
+- **Data capture and tuning**: `thekilngod logger`, `thekilngod tuner`
 
 ## Functional Capabilities
 
@@ -52,7 +52,7 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
 
 ### 3) Temperature Measurement
 
-- Supports Adafruit MAX31855 and MAX31856 thermocouple boards via `lib/oven.py`
+- Supports Adafruit MAX31855 and MAX31856 thermocouple boards via `src/thekilngod/oven.py`
 - Thermocouple type support through MAX31856 (configurable in `config.py`):
   - B, E, J, K, N, R, S, T
 - Hardware SPI and software SPI are supported (auto-selected by config)
@@ -141,19 +141,19 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
 
 ### 12) Home Assistant / MQTT Integration
 
-- Optional MQTT publishing thread (`lib/homeassistant_mqtt.py`)
+- Optional MQTT publishing thread (`src/thekilngod/homeassistant_mqtt.py`)
 - Configurable broker, credentials, topic prefix, client ID
 - Publishes sensors for: temperature, target, status, heat (binary), time remaining, profile name, runtime, heat rate.
 
 ### 13) External Tooling and Operations
 
-- `kiln-logger.py`:
+- `thekilngod logger`:
   - Connects to status WebSocket
   - Logs profile and PID stats to CSV
-- `kiln-tuner.py`:
+- `thekilngod tuner`:
   - Records heat-up/cool-down response
   - Computes PID parameters using Ziegler-Nichols-style method
-- `watcher.py`:
+- `thekilngod watcher`:
   - Polls `/api/stats`
   - Detects repeated failures or excessive error
   - Sends Slack webhook alerts
@@ -252,7 +252,7 @@ Best when:
 
 Given your note that the system works well on a Pi 3, a phased rewrite is likely the safest:
 
-1. Preserve control core first (`lib/oven.py` behavior).
+1. Preserve control core first (`src/thekilngod/oven.py` behavior).
 2. Add a clean, documented API layer around existing runtime.
 3. Build new mobile-friendly UI (PWA first), then decide if native app is still needed.
 4. Only rewrite control core after parity tests exist and safety behavior is captured.

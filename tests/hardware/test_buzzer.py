@@ -1,3 +1,7 @@
+import pytest
+
+pytestmark = pytest.mark.hardware
+
 #!/usr/bin/env python
 """
 Test script for the piezo buzzer.
@@ -9,7 +13,7 @@ import os
 import time
 
 # Add lib directory to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'lib'))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "lib")))
 
 from buzzer import Buzzer
 

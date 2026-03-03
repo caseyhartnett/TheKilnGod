@@ -33,6 +33,13 @@ interface TrendPoint {
   y: number
 }
 
+interface BuilderSegment {
+  id: number
+  target: string
+  ramp: string
+  hold: string
+}
+
 const DEMO_PROFILES: Profile[] = [
   {
     name: 'cone-6-long-glaze',
@@ -81,7 +88,7 @@ function polyline(
 }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'health'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'builder' | 'health'>('dashboard')
   const [status, setStatus] = useState<StatusMessage>({})
   const [samples, setSamples] = useState<Sample[]>([])
   const [lastMessageAt, setLastMessageAt] = useState<number>(0)
@@ -90,6 +97,15 @@ export default function App() {
   const [selectedProfile, setSelectedProfile] = useState<string>('')
   const [apiState, setApiState] = useState<string>('')
   const [startAtMinutes, setStartAtMinutes] = useState<number>(0)
+  const [builderName, setBuilderName] = useState<string>('new-schedule')
+  const [builderStartTemp, setBuilderStartTemp] = useState<string>('75')
+  const [builderSegments, setBuilderSegments] = useState<BuilderSegment[]>([
+    { id: 1, target: '250', ramp: '200', hold: '0' },
+    { id: 2, target: '1000', ramp: '350', hold: '20' },
+    { id: 3, target: '1830', ramp: '150', hold: '15' }
+  ])
+  const [builderError, setBuilderError] = useState<string>('')
+  const [builderSaving, setBuilderSaving] = useState<boolean>(false)
   const [events, setEvents] = useState<UiEvent[]>([])
   const [monitorToken, setMonitorToken] = useState<string>(() => window.localStorage.getItem('kiln_monitor_token') ?? '')
   const [controlToken, setControlToken] = useState<string>(() => window.localStorage.getItem('kiln_api_token') ?? '')
@@ -110,6 +126,67 @@ export default function App() {
 
   const addEvent = (level: UiEvent['level'], text: string) => {
     setEvents((prev) => [{ ts: Date.now(), level, text }, ...prev].slice(0, EVENT_LIMIT))
+  }
+
+  const addBuilderSegment = () => {
+    setBuilderSegments((prev) => {
+      const nextId = prev.length ? Math.max(...prev.map((s) => s.id)) + 1 : 1
+      return [...prev, { id: nextId, target: '', ramp: '', hold: '0' }]
+    })
+  }
+
+  const removeBuilderSegment = (id: number) => {
+    setBuilderSegments((prev) => prev.filter((s) => s.id !== id))
+  }
+
+  const updateBuilderSegment = (id: number, field: keyof Omit<BuilderSegment, 'id'>, value: string) => {
+    setBuilderSegments((prev) => prev.map((s) => (s.id === id ? { ...s, [field]: value } : s)))
+  }
+
+  const buildPointsFromBuilder = (): { points: Array<[number, number]>; error?: string } => {
+    const start = Number(builderStartTemp)
+    if (!Number.isFinite(start)) {
+      return { points: [], error: 'Start temperature must be a number.' }
+    }
+
+    const points: Array<[number, number]> = [[0, Math.round(start)]]
+    let currentTemp = start
+    let currentSec = 0
+    let hasRamp = false
+
+    for (let i = 0; i < builderSegments.length; i += 1) {
+      const seg = builderSegments[i]
+      const target = Number(seg.target)
+      const ramp = Number(seg.ramp)
+      const hold = Number(seg.hold || '0')
+
+      if (!Number.isFinite(target)) continue
+      if (!Number.isFinite(hold) || hold < 0) {
+        return { points: [], error: `Segment ${i + 1}: hold must be >= 0.` }
+      }
+
+      if (target !== currentTemp) {
+        if (!Number.isFinite(ramp) || ramp <= 0) {
+          return { points: [], error: `Segment ${i + 1}: ramp rate must be > 0 when target changes.` }
+        }
+        const rampSec = (Math.abs(target - currentTemp) / ramp) * 3600
+        currentSec += rampSec
+        points.push([Math.round(currentSec), Math.round(target)])
+        currentTemp = target
+        hasRamp = true
+      }
+
+      if (hold > 0) {
+        currentSec += hold * 60
+        points.push([Math.round(currentSec), Math.round(target)])
+      }
+    }
+
+    if (!hasRamp || points.length < 2) {
+      return { points: [], error: 'Add at least one segment with target and ramp rate.' }
+    }
+
+    return { points }
   }
 
   useEffect(() => {
@@ -467,6 +544,161 @@ export default function App() {
     [profiles, selectedProfile]
   )
 
+  const builderResult = useMemo(() => buildPointsFromBuilder(), [builderStartTemp, builderSegments])
+  const builderPoints = builderResult.points
+
+  const onApplyBuilderToPreview = () => {
+    if (builderResult.error) {
+      setBuilderError(builderResult.error)
+      setApiState(builderResult.error)
+      return
+    }
+    const previewProfile: Profile = {
+      name: builderName.trim() || 'new-schedule',
+      data: builderPoints
+    }
+    setProfiles((prev) => {
+      const idx = prev.findIndex((p) => p.name === previewProfile.name)
+      if (idx >= 0) {
+        const copy = [...prev]
+        copy[idx] = previewProfile
+        return copy
+      }
+      return [...prev, previewProfile]
+    })
+    setSelectedProfile(previewProfile.name)
+    setBuilderError('')
+    setApiState('Builder points loaded into profile preview')
+  }
+
+  const saveProfileOverStorage = async (profile: Profile, force = false): Promise<{ ok: boolean; error?: string }> => {
+    return new Promise((resolve) => {
+      let closed = false
+      const token = controlToken.trim()
+      const ws = new WebSocket(getWsUrl('/storage', token))
+      const timeout = window.setTimeout(() => {
+        if (closed) return
+        closed = true
+        try {
+          ws.close()
+        } catch {
+          // ignore
+        }
+        resolve({ ok: false, error: 'Storage save timed out' })
+      }, 6000)
+
+      ws.onopen = () => {
+        ws.send(
+          JSON.stringify({
+            cmd: 'PUT',
+            profile: {
+              type: 'profile',
+              data: profile.data,
+              name: profile.name
+            },
+            force
+          })
+        )
+      }
+
+      ws.onmessage = (event) => {
+        let resp: unknown = null
+        try {
+          resp = JSON.parse(event.data)
+        } catch {
+          // ignore plain messages
+        }
+        if (closed) return
+
+        const parsed = resp as { resp?: string; error?: string } | null
+        if (parsed && parsed.resp === 'OK') {
+          closed = true
+          window.clearTimeout(timeout)
+          ws.close()
+          resolve({ ok: true })
+          return
+        }
+        if (parsed && parsed.resp === 'FAIL') {
+          closed = true
+          window.clearTimeout(timeout)
+          ws.close()
+          resolve({ ok: false, error: parsed.error || 'Profile exists' })
+        }
+      }
+
+      ws.onerror = () => {
+        if (closed) return
+        closed = true
+        window.clearTimeout(timeout)
+        resolve({ ok: false, error: 'Storage websocket error' })
+      }
+    })
+  }
+
+  const onSaveBuilderProfile = async () => {
+    const name = builderName.trim()
+    if (!name) {
+      setBuilderError('Profile name is required.')
+      return
+    }
+    if (builderResult.error) {
+      setBuilderError(builderResult.error)
+      return
+    }
+    const profile: Profile = { name, data: builderPoints }
+    setBuilderSaving(true)
+    try {
+      if (demoMode) {
+        setProfiles((prev) => {
+          const idx = prev.findIndex((p) => p.name === name)
+          if (idx >= 0) {
+            const copy = [...prev]
+            copy[idx] = profile
+            return copy
+          }
+          return [...prev, profile]
+        })
+        setSelectedProfile(name)
+        setBuilderError('')
+        setApiState('Demo: builder profile saved locally')
+        addEvent('info', `Builder saved profile "${name}" (demo mode)`)
+        return
+      }
+
+      let result = await saveProfileOverStorage(profile, false)
+      if (!result.ok && result.error === 'Profile exists') {
+        if (!window.confirm(`Profile "${name}" already exists. Overwrite it?`)) {
+          setBuilderError('Save canceled. Choose a different profile name.')
+          return
+        }
+        result = await saveProfileOverStorage(profile, true)
+      }
+
+      if (!result.ok) {
+        setBuilderError(result.error || 'Failed to save profile')
+        setApiState(result.error || 'Failed to save profile')
+        addEvent('error', `Builder save failed: ${result.error || 'unknown error'}`)
+        return
+      }
+
+      setProfiles((prev) => {
+        const idx = prev.findIndex((p) => p.name === name)
+        if (idx >= 0) {
+          const copy = [...prev]
+          copy[idx] = profile
+          return copy
+        }
+        return [...prev, profile]
+      })
+      setSelectedProfile(name)
+      setBuilderError('')
+      setApiState(`Saved profile "${name}"`)
+      addEvent('info', `Builder saved profile "${name}"`)
+    } finally {
+      setBuilderSaving(false)
+    }
+  }
+
   const kilnState = status.state ?? 'IDLE'
   const isRunning = kilnState === 'RUNNING'
   const isPaused = kilnState === 'PAUSED'
@@ -748,6 +980,13 @@ export default function App() {
           onClick={() => setActiveTab('dashboard')}
         >
           Dashboard
+        </button>
+        <button
+          type="button"
+          className={`tabbtn ${activeTab === 'builder' ? 'active' : ''}`}
+          onClick={() => setActiveTab('builder')}
+        >
+          Schedule Builder
         </button>
         <button
           type="button"
@@ -1138,6 +1377,103 @@ export default function App() {
             ))}
           </ul>
         )}
+      </section>
+      ) : null}
+
+      {activeTab === 'builder' ? (
+      <section className="card builder-card">
+        <h3>Schedule Builder</h3>
+        <p className="api-state">Create a schedule from target/ramp/hold segments, then save as a profile.</p>
+        <div className="builder-grid">
+          <label htmlFor="builder-name">Profile Name</label>
+          <input
+            id="builder-name"
+            type="text"
+            value={builderName}
+            onChange={(e) => setBuilderName(e.target.value)}
+            placeholder="cone-6-custom"
+          />
+          <label htmlFor="builder-start">Start Temp</label>
+          <input
+            id="builder-start"
+            type="number"
+            value={builderStartTemp}
+            onChange={(e) => setBuilderStartTemp(e.target.value)}
+          />
+        </div>
+
+        <div className="builder-rows">
+          <div className="builder-head">
+            <span>Target</span>
+            <span>Ramp °/h</span>
+            <span>Hold min</span>
+            <span />
+          </div>
+          {builderSegments.map((seg, idx) => (
+            <div className="builder-row" key={seg.id}>
+              <input
+                type="number"
+                value={seg.target}
+                onChange={(e) => updateBuilderSegment(seg.id, 'target', e.target.value)}
+                placeholder={idx === 0 ? 'e.g. 250' : ''}
+              />
+              <input
+                type="number"
+                min={0}
+                value={seg.ramp}
+                onChange={(e) => updateBuilderSegment(seg.id, 'ramp', e.target.value)}
+                placeholder="e.g. 200"
+              />
+              <input
+                type="number"
+                min={0}
+                value={seg.hold}
+                onChange={(e) => updateBuilderSegment(seg.id, 'hold', e.target.value)}
+                placeholder="0"
+              />
+              <button
+                type="button"
+                className="danger"
+                onClick={() => removeBuilderSegment(seg.id)}
+                disabled={builderSegments.length <= 1}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="controls-row builder-actions">
+          <button type="button" onClick={addBuilderSegment}>Add Segment</button>
+          <button type="button" onClick={onApplyBuilderToPreview}>Preview In Profile Table</button>
+          <button type="button" onClick={onSaveBuilderProfile} disabled={builderSaving}>
+            {builderSaving ? 'Saving…' : 'Save Profile'}
+          </button>
+        </div>
+
+        {builderResult.error ? <p className="api-state">{builderResult.error}</p> : null}
+        {builderError ? <p className="api-state">{builderError}</p> : null}
+
+        <div className="profile-table-wrap">
+          <table className="profile-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Time (s)</th>
+                <th>Target</th>
+              </tr>
+            </thead>
+            <tbody>
+              {builderPoints.slice(0, 40).map((point, idx) => (
+                <tr key={`builder-${idx}`}>
+                  <td>{idx + 1}</td>
+                  <td>{Math.round(point[0])}</td>
+                  <td>{Math.round(point[1])}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </section>
       ) : null}
     </main>
