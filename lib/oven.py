@@ -3,12 +3,16 @@ import time
 import datetime
 import logging
 import json
+import uuid
+import math
+from collections import deque
 import config
 import os
 import digitalio
 import busio
 import adafruit_bitbangio as bitbangio
 import statistics
+from telemetry_math import avg, bool_pct
 
 log = logging.getLogger(__name__)
 
@@ -332,6 +336,7 @@ class Oven(threading.Thread):
         self.temperature = 0
         self.time_step = config.sensor_time_wait
         self.buzzer = buzzer
+        self.notifier = None
         self.reset()
 
     def reset(self):
@@ -347,6 +352,277 @@ class Oven(threading.Thread):
         self.heat_rate_temps = []
         self.pid = PID(ki=config.pid_ki, kd=config.pid_kd, kp=config.pid_kp)
         self.catching_up = False
+        self._init_telemetry()
+
+    def _init_telemetry(self):
+        self.telemetry_window_seconds = 300
+        self.telemetry_samples = deque()
+        self.telemetry_switches_5m = deque()
+        self.telemetry_last_heat_state = None
+        self.telemetry_last_sample_runtime = None
+        self.telemetry_last_runtime = 0
+        self.telemetry_last_catching_up = False
+        self.telemetry_run_samples = 0
+        self.telemetry_run_within_5deg = 0
+        self.telemetry_run_error_sum = 0.0
+        self.telemetry_run_error_abs_sum = 0.0
+        self.telemetry_run_switches = 0
+        self.telemetry_run_overshoot_max = 0.0
+        self.telemetry_run_catching_up_seconds = 0.0
+        self.telemetry_run_heat_on_seconds = 0.0
+        self.telemetry_run_high_temp_seconds = 0.0
+        self.telemetry_run_high_temp_heat_on_seconds = 0.0
+        self.telemetry_run_high_temp_error_abs_sum = 0.0
+        self.telemetry_run_high_temp_samples = 0
+        self.telemetry_run_max_temp = 0.0
+        self.telemetry_run_max_target = 0.0
+        self.current_run_id = None
+        self.current_run_started_ts = None
+        self.current_run_peak_target = None
+        self.alert_last_sent_at = {}
+        self.alert_sent_once = set()
+        self.next_profile_checkpoint_index = None
+        self.next_temp_milestone = None
+        if not hasattr(self, 'last_run_summary'):
+            self.last_run_summary = None
+
+    def _record_telemetry_sample(self, temp):
+        # Record telemetry only once per control-cycle-ish runtime progression
+        if self.state not in ("RUNNING", "PAUSED"):
+            return
+        if self.telemetry_last_sample_runtime is not None:
+            if abs(self.runtime - self.telemetry_last_sample_runtime) < 0.5:
+                return
+        self.telemetry_last_sample_runtime = self.runtime
+
+        now = time.time()
+        error = self.target - temp
+        abs_error = abs(error)
+        within_5deg = abs_error <= 5
+        heat_on = 1 if self.heat > 0 else 0
+        overshoot = max(0.0, temp - self.target)
+
+        if self.telemetry_last_heat_state is not None and heat_on != self.telemetry_last_heat_state:
+            self.telemetry_run_switches += 1
+            self.telemetry_switches_5m.append(now)
+        self.telemetry_last_heat_state = heat_on
+
+        runtime_delta = max(0.0, self.runtime - self.telemetry_last_runtime)
+        prev_runtime = self.telemetry_last_runtime
+        if self.telemetry_last_runtime > 0 and self.telemetry_last_catching_up:
+            self.telemetry_run_catching_up_seconds += runtime_delta
+        if prev_runtime > 0 and heat_on:
+            self.telemetry_run_heat_on_seconds += runtime_delta
+        self.telemetry_last_runtime = self.runtime
+        self.telemetry_last_catching_up = self.catching_up
+
+        self.telemetry_run_samples += 1
+        self.telemetry_run_error_sum += error
+        self.telemetry_run_error_abs_sum += abs_error
+        if within_5deg:
+            self.telemetry_run_within_5deg += 1
+        if overshoot > self.telemetry_run_overshoot_max:
+            self.telemetry_run_overshoot_max = overshoot
+        if temp > self.telemetry_run_max_temp:
+            self.telemetry_run_max_temp = temp
+        if self.target > self.telemetry_run_max_target:
+            self.telemetry_run_max_target = self.target
+
+        if self.current_run_peak_target and self.current_run_peak_target > 0:
+            high_temp_threshold = self.current_run_peak_target * 0.9
+            if self.target >= high_temp_threshold:
+                self.telemetry_run_high_temp_seconds += runtime_delta
+                if heat_on:
+                    self.telemetry_run_high_temp_heat_on_seconds += runtime_delta
+                self.telemetry_run_high_temp_error_abs_sum += abs_error
+                self.telemetry_run_high_temp_samples += 1
+
+        self.telemetry_samples.append({
+            'time': now,
+            'runtime': self.runtime,
+            'error': error,
+            'abs_error': abs_error,
+            'heat_on': heat_on,
+            'within_5deg': within_5deg,
+            'temperature': temp,
+            'target': self.target,
+            'catching_up': self.catching_up,
+            'sensor_error_percent': self.board.temp_sensor.status.error_percent(),
+        })
+
+        cutoff = now - self.telemetry_window_seconds
+        while self.telemetry_samples and self.telemetry_samples[0]['time'] < cutoff:
+            self.telemetry_samples.popleft()
+        while self.telemetry_switches_5m and self.telemetry_switches_5m[0] < cutoff:
+            self.telemetry_switches_5m.popleft()
+        self._check_runtime_alerts(now, temp, error)
+
+    def _notify_with_cooldown(self, key, event, payload, cooldown_seconds=None):
+        if cooldown_seconds is None:
+            cooldown_seconds = float(getattr(config, 'notifications_alert_cooldown_seconds', 300))
+        now = time.time()
+        last_ts = self.alert_last_sent_at.get(key)
+        if last_ts is not None and (now - last_ts) < cooldown_seconds:
+            return False
+        self.alert_last_sent_at[key] = now
+        self._notify_event(event, payload)
+        return True
+
+    def _notify_once_per_run(self, key, event, payload):
+        if key in self.alert_sent_once:
+            return False
+        self.alert_sent_once.add(key)
+        self._notify_event(event, payload)
+        return True
+
+    def _check_runtime_alerts(self, now, temp, error):
+        if self.state != "RUNNING" or not self.profile:
+            return
+        self._check_profile_rate_change_alert()
+        self._check_temp_milestone_alert(temp)
+        self._check_abnormal_deviation_alert(now, temp, error)
+
+    def _check_profile_rate_change_alert(self):
+        points = self.profile.data if self.profile else []
+        if len(points) < 3:
+            return
+        if self.next_profile_checkpoint_index is None:
+            for idx in range(1, len(points) - 1):
+                if points[idx][0] > self.runtime:
+                    self.next_profile_checkpoint_index = idx
+                    break
+            if self.next_profile_checkpoint_index is None:
+                self.next_profile_checkpoint_index = len(points) - 1
+
+        while self.next_profile_checkpoint_index is not None and self.next_profile_checkpoint_index < len(points) - 1:
+            idx = self.next_profile_checkpoint_index
+            checkpoint_time = points[idx][0]
+            if self.runtime < checkpoint_time:
+                break
+
+            prev_point = points[idx - 1]
+            curr_point = points[idx]
+            next_point = points[idx + 1]
+            prev_slope = 0.0
+            next_slope = 0.0
+            if curr_point[0] > prev_point[0]:
+                prev_slope = (curr_point[1] - prev_point[1]) / float(curr_point[0] - prev_point[0]) * 3600.0
+            if next_point[0] > curr_point[0]:
+                next_slope = (next_point[1] - curr_point[1]) / float(next_point[0] - curr_point[0]) * 3600.0
+
+            self._notify_once_per_run(
+                key="rate_change_%d" % idx,
+                event="profile_rate_change",
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "checkpoint_seconds": checkpoint_time,
+                    "checkpoint_hours": checkpoint_time / 3600.0,
+                    "temperature_target": curr_point[1],
+                    "previous_rate_deg_per_hour": prev_slope,
+                    "new_rate_deg_per_hour": next_slope,
+                },
+            )
+            self.next_profile_checkpoint_index = idx + 1
+
+    def _check_temp_milestone_alert(self, temp):
+        interval = float(getattr(config, 'notifications_temp_milestone_interval', 500))
+        if interval <= 0:
+            return
+        if self.next_temp_milestone is None:
+            self.next_temp_milestone = math.floor(max(0.0, temp) / interval) * interval + interval
+
+        while self.next_temp_milestone is not None and temp >= self.next_temp_milestone:
+            milestone = self.next_temp_milestone
+            self._notify_once_per_run(
+                key="temp_milestone_%d" % int(milestone),
+                event="temp_milestone_reached",
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "milestone_temp": milestone,
+                    "temperature": temp,
+                    "target": self.target,
+                    "runtime_hours": self.runtime / 3600.0 if self.runtime else 0.0,
+                },
+            )
+            self.next_temp_milestone += interval
+
+    def _check_abnormal_deviation_alert(self, now, temp, error):
+        drop_window = float(getattr(config, 'notifications_deviation_drop_window_seconds', 45))
+        drop_threshold = float(getattr(config, 'notifications_deviation_drop_threshold', 20))
+        min_error = float(getattr(config, 'notifications_deviation_min_error', 35))
+        min_target = float(getattr(config, 'notifications_deviation_min_target_temp', 300))
+
+        if self.target < min_target or error < min_error or self.heat <= 0:
+            return
+
+        sample = None
+        cutoff = now - drop_window
+        for item in self.telemetry_samples:
+            if item['time'] >= cutoff:
+                sample = item
+                break
+        if not sample:
+            return
+
+        temp_drop = temp - sample['temperature']
+        if temp_drop <= -abs(drop_threshold):
+            self._notify_with_cooldown(
+                key='abnormal_deviation',
+                event='abnormal_deviation',
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "temperature": temp,
+                    "target": self.target,
+                    "error": error,
+                    "drop_window_seconds": drop_window,
+                    "temperature_drop": temp_drop,
+                    "runtime_hours": self.runtime / 3600.0 if self.runtime else 0.0,
+                },
+                cooldown_seconds=float(getattr(config, 'notifications_deviation_cooldown_seconds', 300)),
+            )
+
+    def get_telemetry(self):
+        recent = list(self.telemetry_samples)
+        errors = [sample['error'] for sample in recent]
+        abs_errors = [sample['abs_error'] for sample in recent]
+        heat = [sample['heat_on'] for sample in recent]
+        within = [sample['within_5deg'] for sample in recent]
+        sensor_errors = [sample['sensor_error_percent'] for sample in recent]
+
+        one_minute_cutoff = time.time() - 60
+        recent_1m_errors = [sample['error'] for sample in recent if sample['time'] >= one_minute_cutoff]
+
+        runtime_hours = self.runtime / 3600 if self.runtime > 0 else 0
+        switches_per_hour = self.telemetry_run_switches / runtime_hours if runtime_hours > 0 else 0.0
+        within_5deg_run = (
+            (self.telemetry_run_within_5deg / float(self.telemetry_run_samples)) * 100
+            if self.telemetry_run_samples
+            else 0.0
+        )
+        catching_up_pct_run = (
+            (self.telemetry_run_catching_up_seconds / self.runtime) * 100
+            if self.runtime > 0
+            else 0.0
+        )
+
+        return {
+            'window_seconds': self.telemetry_window_seconds,
+            'error_now': self.target - self.temperature,
+            'error_avg_1m': avg(recent_1m_errors),
+            'error_avg_5m': avg(errors),
+            'error_abs_avg_5m': avg(abs_errors),
+            'within_5deg_pct_5m': bool_pct(within),
+            'within_5deg_pct_run': within_5deg_run,
+            'switches_5m': len(self.telemetry_switches_5m),
+            'switches_per_hour_run': switches_per_hour,
+            'duty_cycle_5m': avg(heat) * 100,
+            'overshoot_max_run': self.telemetry_run_overshoot_max,
+            'time_catching_up_pct_run': catching_up_pct_run,
+            'sensor_error_rate_5m': avg(sensor_errors),
+        }
 
     @staticmethod
     def get_start_from_temperature(profile, temp):
@@ -397,18 +673,97 @@ class Oven(threading.Thread):
         self.start_time = datetime.datetime.now() - datetime.timedelta(seconds=self.startat)
         self.profile = profile
         self.totaltime = profile.get_duration()
+        self.current_run_id = str(uuid.uuid4())
+        self.current_run_started_ts = time.time()
+        self.current_run_peak_target = max((temp for (_, temp) in profile.data), default=0)
+        self.next_profile_checkpoint_index = None
+        self.next_temp_milestone = None
+        self.current_run_summary = None
         self.state = "RUNNING"
         log.info("Running schedule %s starting at %d minutes" % (profile.name,startat))
         log.info("Starting")
-        
-        # Play start firing sound
-        if hasattr(self, 'buzzer') and self.buzzer:
-            self.buzzer.start_firing()
+        self._notify_event("run_started", {
+            "profile": profile.name,
+            "startat_minutes": startat,
+            "run_id": self.current_run_id,
+        })
 
-    def abort_run(self, emergency=False):
-        # Play manual stop sound only if not an emergency (emergency already played error sound)
-        if not emergency and hasattr(self, 'buzzer') and self.buzzer:
-            self.buzzer.manual_stop()
+    def get_run_health_summary(self, reason):
+        runtime_hours = self.runtime / 3600 if self.runtime > 0 else 0.0
+        switches_per_hour = self.telemetry_run_switches / runtime_hours if runtime_hours > 0 else 0.0
+        within_5deg_run = (
+            (self.telemetry_run_within_5deg / float(self.telemetry_run_samples)) * 100
+            if self.telemetry_run_samples
+            else 0.0
+        )
+        heat_duty_run = (self.telemetry_run_heat_on_seconds / self.runtime) * 100 if self.runtime > 0 else 0.0
+        high_temp_duty = (
+            (self.telemetry_run_high_temp_heat_on_seconds / self.telemetry_run_high_temp_seconds) * 100
+            if self.telemetry_run_high_temp_seconds > 0
+            else 0.0
+        )
+        high_temp_mae = (
+            self.telemetry_run_high_temp_error_abs_sum / float(self.telemetry_run_high_temp_samples)
+            if self.telemetry_run_high_temp_samples
+            else 0.0
+        )
+        peak_target = self.current_run_peak_target if self.current_run_peak_target else self.telemetry_run_max_target
+        max_temp_gap_to_peak = peak_target - self.telemetry_run_max_temp if peak_target else 0.0
+
+        return {
+            'run_id': self.current_run_id,
+            'started_at': datetime.datetime.utcfromtimestamp(self.current_run_started_ts).isoformat() + 'Z'
+                if self.current_run_started_ts else None,
+            'ended_at': datetime.datetime.utcnow().isoformat() + 'Z',
+            'reason': reason,
+            'profile': self.profile.name if self.profile else None,
+            'runtime_seconds': self.runtime,
+            'runtime_hours': runtime_hours,
+            'cost': self.cost,
+            'max_temp': self.telemetry_run_max_temp,
+            'max_target': self.telemetry_run_max_target,
+            'peak_profile_target': peak_target,
+            'max_temp_gap_to_peak_target': max_temp_gap_to_peak,
+            'overshoot_max': self.telemetry_run_overshoot_max,
+            'within_5deg_pct': within_5deg_run,
+            'switch_count': self.telemetry_run_switches,
+            'switches_per_hour': switches_per_hour,
+            'heat_duty_pct': heat_duty_run,
+            'high_temp_seconds': self.telemetry_run_high_temp_seconds,
+            'high_temp_duty_pct': high_temp_duty,
+            'high_temp_mae': high_temp_mae,
+            'catching_up_seconds': self.telemetry_run_catching_up_seconds,
+            'catching_up_pct': (self.telemetry_run_catching_up_seconds / self.runtime) * 100 if self.runtime > 0 else 0.0,
+            'sensor_error_rate_5m': avg([sample['sensor_error_percent'] for sample in self.telemetry_samples]),
+            'completed': reason == 'schedule_complete',
+        }
+
+    def save_run_health_summary(self, summary):
+        if not getattr(config, 'run_health_history_enabled', True):
+            return
+        try:
+            with open(config.run_health_history_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(summary) + '\n')
+        except Exception as error:
+            log.error("failed writing run health history: %s", error)
+
+    def finalize_run(self, reason='abort'):
+        if self.state in ('RUNNING', 'PAUSED') and self.profile:
+            summary = self.get_run_health_summary(reason)
+            self.last_run_summary = summary
+            self.save_run_health_summary(summary)
+            log.info("run health summary saved for profile=%s reason=%s", summary.get('profile'), reason)
+            self._notify_event("run_finished", summary)
+
+    def abort_run(self, reason='abort'):
+        if self.buzzer:
+            if reason == 'schedule_complete':
+                self.buzzer.firing_complete()
+            elif str(reason).startswith('manual_stop'):
+                self.buzzer.manual_stop()
+            elif str(reason).startswith('emergency'):
+                self.buzzer.error()
+        self.finalize_run(reason=reason)
         self.reset()
         self.save_automatic_restart_state()
 
@@ -451,28 +806,47 @@ class Oven(threading.Thread):
         if (self.board.temp_sensor.temperature() + config.thermocouple_offset >=
             config.emergency_shutoff_temp):
             log.info("emergency!!! temperature too high")
+            self._notify_with_cooldown(
+                key='temp_too_high',
+                event='issue_detected',
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "issue": "temperature_too_high",
+                    "temperature": self.board.temp_sensor.temperature() + config.thermocouple_offset,
+                    "limit": config.emergency_shutoff_temp,
+                },
+                cooldown_seconds=60,
+            )
             if config.ignore_temp_too_high == False:
-                # Play error sound before aborting
-                if hasattr(self, 'buzzer') and self.buzzer:
-                    self.buzzer.error()
-                self.abort_run(emergency=True)
+                self.abort_run(reason='emergency_temp_too_high')
         
         if self.board.temp_sensor.status.over_error_limit():
             log.info("emergency!!! too many errors in a short period")
+            self._notify_with_cooldown(
+                key='tc_error_rate',
+                event='issue_detected',
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "issue": "thermocouple_error_rate_high",
+                    "error_rate_pct": self.board.temp_sensor.status.error_percent(),
+                },
+                cooldown_seconds=60,
+            )
             if config.ignore_tc_too_many_errors == False:
-                # Play error sound before aborting
-                if hasattr(self, 'buzzer') and self.buzzer:
-                    self.buzzer.error()
-                self.abort_run(emergency=True)
+                self._notify_event("sensor_fault", {
+                    "error_rate_pct": self.board.temp_sensor.status.error_percent(),
+                    "run_id": self.current_run_id,
+                    "profile": self.profile.name if self.profile else None,
+                })
+                self.abort_run(reason='emergency_tc_error_rate')
 
     def reset_if_schedule_ended(self):
         if self.runtime > self.totaltime:
             log.info("schedule ended, shutting down")
             log.info("total cost = %s%.2f" % (config.currency_type,self.cost))
-            # Play completion sound before aborting
-            if hasattr(self, 'buzzer') and self.buzzer:
-                self.buzzer.firing_complete()
-            self.abort_run(emergency=False)
+            self.abort_run(reason='schedule_complete')
 
     def update_cost(self):
         if self.heat:
@@ -496,6 +870,8 @@ class Oven(threading.Thread):
             temp = 0
 
         self.set_heat_rate(self.runtime,temp)
+        self.temperature = temp
+        self._record_telemetry_sample(temp)
 
         state = {
             'cost': self.cost,
@@ -511,6 +887,8 @@ class Oven(threading.Thread):
             'profile': self.profile.name if self.profile else None,
             'pidstats': self.pid.pidstats,
             'catching_up': self.catching_up,
+            'telemetry': self.get_telemetry(),
+            'last_run_summary': self.last_run_summary,
         }
         return state
 
@@ -570,6 +948,20 @@ class Oven(threading.Thread):
     def set_ovenwatcher(self,watcher):
         log.info("ovenwatcher set in oven class")
         self.ovenwatcher = watcher
+
+    def set_notifier(self, notifier):
+        self.notifier = notifier
+
+    def emit_notification(self, event, payload=None):
+        self._notify_event(event, payload)
+
+    def _notify_event(self, event, payload=None):
+        if not self.notifier:
+            return
+        try:
+            self.notifier.emit_event(event, payload or {})
+        except Exception as exc:
+            log.error("failed to queue notification event=%s: %s", event, exc)
 
     def run(self):
         while True:

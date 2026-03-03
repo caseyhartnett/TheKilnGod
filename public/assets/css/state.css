@@ -1,50 +1,118 @@
+:root {
+  --bg-app: #1e1e1e;
+  --bg-panel: #252526;
+  --bg-card: #2d2d30;
+  --bg-border: #3e3e42;
+  --fg-primary: #ffffff;
+  --fg-secondary: #e5e7eb;
+  --fg-muted: #9ca3af;
+  --accent: #2563eb;
+  --ok: #16a34a;
+  --warn: #f59e0b;
+  --error: #dc2626;
+}
+
+body {
+  margin: 0;
+  padding: 8px;
+  font-family: "Trebuchet MS", "Segoe UI", sans-serif;
+  background: var(--bg-app);
+  color: var(--fg-primary);
+}
+
 .container {
-  border-radius: 5px;
-  background: #888888;
-  //background: #CCCCCC;
-  padding: 2px;
+  border-radius: 8px;
+  background: var(--bg-panel);
+  padding: 4px;
   display: flex;
-  flex-direction: row;
-  align-items: center;
   flex-wrap: wrap;
+  flex-direction: row;
+  align-items: stretch;
   width: max-content;
-  font-family: sans-serif;
-  margin: 4px;
+  margin: 6px;
+  border: 1px solid var(--bg-border);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
 .stat {
   padding: 2px;
   border-radius: 5px;
-  font-size: 40pt;
-  color: #FFFFFF;
-  }
+  font-size: 28pt;
+  color: var(--fg-primary);
+}
 
 .stattxt {
-  padding: 7px;
-  border-radius: 5px;
-  font-size: 40pt;
-  background: #BBBBBB;
-  //color: #FFFFFF;
-  color: #888888;
-  margin: 1px 2px 1px 2px;
+  padding: 9px;
+  border-radius: 6px;
+  font-size: 22pt;
+  background: #1f2937;
+  color: var(--fg-muted);
+  margin: 1px 3px 1px 2px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
 }
 
 .top {
-  border-radius: 5px 5px 0px 0px;
-  background: #0000CC;
-  padding: 4px;
-  color: #CCCCCC;
+  border-radius: 5px 5px 0 0;
+  background: #1f2937;
+  padding: 4px 7px;
+  color: var(--fg-muted);
   text-align: center;
-  font-size: 18pt;
+  font-size: 12pt;
+  border: 1px solid var(--bg-border);
+  border-bottom: none;
 }
 
 .bottom {
-  border-radius: 0px 0px 5px 5px;
-  background: #BBBBBB;
-  padding: 4px;
+  border-radius: 0 0 5px 5px;
+  background: var(--bg-card);
+  padding: 5px 8px;
   text-align: center;
-  color: #0000CC;
-  font-size: 20pt;
+  color: var(--fg-secondary);
+  font-size: 16pt;
+  font-weight: 700;
+  min-width: 96px;
+  border: 1px solid var(--bg-border);
+}
+
+#stream-status {
+  margin: 6px;
+  padding: 6px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  color: var(--fg-muted);
+  font-weight: 600;
+}
+
+#state {
+  margin: 6px;
+  border: 1px solid var(--bg-border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  padding: 6px;
+}
+
+#state pre {
+  color: var(--fg-muted);
+  margin: 0;
+}
+
+#error-5m,
+#switching-5m,
+#temps,
+#error,
+#heat,
+#p,
+#i,
+#d,
+#state-table {
+  margin: 8px 6px;
+}
+
+a {
+  color: #60a5fa;
 }
 
 /* Mobile Responsive Styles */

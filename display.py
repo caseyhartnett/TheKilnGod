@@ -5,14 +5,20 @@ Displays temperature, target, state, profile, and time information
 Uses luma.oled library for proper SSD1309 support with correct voltage booster configuration
 """
 
-from luma.core.interface.serial import i2c
-from luma.core.render import canvas
-from luma.oled.device import ssd1309
-from PIL import Image
 import logging
 import config
 import os
 import re
+
+try:
+    from luma.core.interface.serial import i2c
+    from luma.core.render import canvas
+    from luma.oled.device import ssd1309
+    from PIL import Image
+    DISPLAY_DEPS_AVAILABLE = True
+except Exception as e:
+    DISPLAY_DEPS_AVAILABLE = False
+    DISPLAY_IMPORT_ERROR = e
 
 log = logging.getLogger("kiln-controller.display")
 
@@ -44,9 +50,15 @@ class KilnDisplay:
         
         self.device = None
         self.initialized = False
+        self.unavailable_reason = None
         
         if not config_enabled:
             log.info("Display disabled in config")
+            return
+
+        if not DISPLAY_DEPS_AVAILABLE:
+            self.unavailable_reason = f"display dependencies missing: {DISPLAY_IMPORT_ERROR}"
+            log.warning(self.unavailable_reason)
             return
 
         try:
@@ -88,6 +100,14 @@ class KilnDisplay:
             return f"{hours:02d}:{minutes:02d}:{secs:02d}"
         else:
             return f"{minutes:02d}:{secs:02d}"
+
+    @staticmethod
+    def _truncate(text, max_chars):
+        if text is None:
+            return ""
+        if len(text) <= max_chars:
+            return text
+        return text[: max_chars - 1] + "…"
     
     def update(self, oven_state, temp_scale="f"):
         """
@@ -129,32 +149,32 @@ class KilnDisplay:
                     profile_text = profile[:12] if len(profile) > 12 else profile
                     state_text = f"{state} - {profile_text}"
                 
-                draw.text((0, 0), state_text, fill="white")
+                draw.text((0, 0), self._truncate(state_text, 21), fill="white")
                 
                 # Line 2: Current Temperature
                 temp_text = f"Temp: {self.format_temperature(temp, temp_scale)}"
-                draw.text((0, 12), temp_text, fill="white")
+                draw.text((0, 12), self._truncate(temp_text, 21), fill="white")
                 
                 # Line 3: Target Temperature
                 target_text = f"Targ: {self.format_temperature(target, temp_scale)}"
-                draw.text((0, 24), target_text, fill="white")
+                draw.text((0, 24), self._truncate(target_text, 21), fill="white")
                 
                 # Line 4: Time information
                 if state in ['RUNNING', 'PAUSED'] and totaltime > 0:
                     time_text = f"Time: {self.format_time(runtime)} / {self.format_time(totaltime)}"
-                    draw.text((0, 36), time_text, fill="white")
+                    draw.text((0, 36), self._truncate(time_text, 21), fill="white")
                     
                     # Line 5: Time remaining and heat rate
                     remaining_text = f"Rem: {self.format_time(time_remaining)}"
                     if heat_rate > 0:
                         rate_text = f" {heat_rate:.0f}°/hr"
                         remaining_text += rate_text
-                    draw.text((0, 48), remaining_text, fill="white")
+                    draw.text((0, 48), self._truncate(remaining_text, 21), fill="white")
                 else:
                     # Show heat rate if available
                     if heat_rate > 0:
                         rate_text = f"Rate: {heat_rate:.0f}°/hr"
-                        draw.text((0, 36), rate_text, fill="white")
+                        draw.text((0, 36), self._truncate(rate_text, 21), fill="white")
             
         except Exception as e:
             log.error(f"Error updating display: {e}")

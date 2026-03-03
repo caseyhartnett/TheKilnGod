@@ -11,3 +11,5 @@ thumbs.db
 state.json
 venv/*
 secrets.py
+ui-v2/node_modules/
+public/v2/

@@ -1,3 +1,29 @@
 #!/bin/bash
-sudo cp /home/bigred/TheKilnGod/lib/init/kiln-controller.service /etc/systemd/system/
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SERVICE_SRC="$REPO_DIR/lib/init/kiln-controller.service"
+SERVICE_TMP="/tmp/kiln-controller.service"
+SERVICE_DST="/etc/systemd/system/kiln-controller.service"
+RUN_USER="${SUDO_USER:-$USER}"
+
+if [[ ! -f "$SERVICE_SRC" ]]; then
+  echo "Service template not found: $SERVICE_SRC" >&2
+  exit 1
+fi
+
+sed \
+  -e "s|__REPO_DIR__|$REPO_DIR|g" \
+  -e "s|__RUN_USER__|$RUN_USER|g" \
+  "$SERVICE_SRC" > "$SERVICE_TMP"
+
+sudo cp "$SERVICE_TMP" "$SERVICE_DST"
+rm -f "$SERVICE_TMP"
+
+sudo systemctl daemon-reload
 sudo systemctl enable kiln-controller
+
+echo "Installed kiln-controller service:"
+echo "  user: $RUN_USER"
+echo "  repo: $REPO_DIR"
+echo "  unit: $SERVICE_DST"

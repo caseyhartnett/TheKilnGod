@@ -35,6 +35,21 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 
 ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/kiln-schedule.png)
 
+## UI v2 (Experimental)
+
+A modern dashboard is available under `ui-v2/` and can be built into `public/v2`.
+
+- Open directly at: `http://<kiln-ip>:8081/v2`
+- Development server:
+  - `cd ui-v2`
+  - `npm install`
+  - `npm run dev`
+- Production build:
+  - `cd ui-v2`
+  - `npm run build`
+
+The v2 build output is served by the existing bottle static route from `public/v2/`.
+
 ## Hardware
 
 ### Parts
@@ -117,27 +132,22 @@ If you're done playing around with simulations and want to deploy the code on a 
 
 All parameters are defined in `config.py`. You need to read through `config.py` carefully to understand each setting.
 
-### Secrets and Local Configuration
+For security, keep sensitive values (passwords/tokens) in `secrets.py`, which overrides `config.py` and is not tracked by git.
 
-Sensitive information (like MQTT passwords) or machine-specific configuration should be placed in a `secrets.py` file. This file is not tracked by git.
+### Secrets and Local Configuration
 
 1. Copy `secrets_example.py` to `secrets.py`:
    ```bash
    cp secrets_example.py secrets.py
    ```
 
-2. Edit `secrets.py` with your local settings:
+2. Set sensitive values in `secrets.py`:
    ```python
-   # secrets.py
    ha_mqtt_username = "my_real_username"
    ha_mqtt_password = "my_real_password"
-   
-   # You can override any other config setting here too
-   # ha_mqtt_broker = "192.168.1.50"
-   # simulate = False
+   api_control_token = "long_random_token"
+   ntfy_topic = "my-private-topic"
    ```
-
-Any variable defined in `secrets.py` will override the default value in `config.py`.
 
 ### Important Settings
 
@@ -152,6 +162,13 @@ Any variable defined in `secrets.py` will override the default value in `config.
 | display_enabled | True | Enable/disable the OLED display |
 | display_i2c_address | 0x3C | I2C address of the OLED display |
 | display_i2c_port | 1 | I2C port number (typically 1 on Raspberry Pi) |
+| api_control_token | None | Optional token to require for control commands on POST /api via `X-API-Token` header |
+| api_monitor_token | None | Optional token to require for monitoring endpoints (`/api/stats`, `/status`, `/config`, `/storage`) |
+| command_audit_enabled | True | Enable JSON-lines command audit logging |
+| command_audit_log_file | `<repo>/command-audit.log` | Audit log file path for control/storage actions |
+| run_health_history_enabled | True | Enable per-run health summary logging |
+| run_health_history_file | `<repo>/run-health-history.jsonl` | JSON-lines run health history used for trend charting |
+| run_health_exclusions_file | `<repo>/run-health-exclusions.json` | JSON list of run IDs excluded from health trend analysis |
 
 ## Home Assistant Integration
 
@@ -159,14 +176,14 @@ The controller includes MQTT support to integrate with Home Assistant. This allo
 
 ### Setup
 
-1. Ensure MQTT is enabled in `config.py` (or `secrets.py`):
+1. Ensure MQTT is enabled in `config.py`:
    ```python
    ha_mqtt_enabled = True
    ha_mqtt_broker = "192.168.1.100"
    ha_mqtt_port = 1883
    ```
 
-2. Set your MQTT username and password in `secrets.py` as described in the Configuration section above.
+2. Set your MQTT username and password in `secrets.py`.
 
 ### Published Sensors
 
@@ -242,6 +259,16 @@ then test the output with:
 test the OLED display with:
 
      $ python test_display.py
+
+## Run Health Trends
+
+To plot long-term run health/aging indicators across firings:
+
+```bash
+python3 run-health-trends.py
+```
+
+See [docs/run-health.md](docs/run-health.md) for details.
 
 or test image display functionality with:
 

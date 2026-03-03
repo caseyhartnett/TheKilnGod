@@ -14,6 +14,52 @@ log_format = '%(asctime)s %(levelname)s %(name)s: %(message)s'
 ### Server
 listening_port = 8081
 
+# Optional control API token. If set, command operations on POST /api require
+# header X-API-Token (or query param token). Leave as None to disable auth.
+api_control_token = None
+
+# Optional monitor token. If set, read/monitor endpoints (stats/status/config/storage GET)
+# require this token (or control token). Leave as None to disable monitor auth.
+api_monitor_token = None
+
+# Command audit log (JSON lines). Tracks control actions for post-run review.
+command_audit_enabled = True
+command_audit_log_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'command-audit.log'))
+
+# Run health history (JSON lines). Used for between-run trend analysis and
+# early detection of kiln element performance degradation.
+run_health_history_enabled = True
+run_health_history_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'run-health-history.jsonl'))
+run_health_exclusions_file = os.path.abspath(os.path.join(os.path.dirname(__file__), 'run-health-exclusions.json'))
+
+# Optional push notifications.
+# Supported provider: "ntfy"
+notifications_enabled = False
+notification_provider = "ntfy"
+notifications_timeout_seconds = 4.0
+notifications_queue_size = 200
+
+# ntfy backend settings
+# See https://docs.ntfy.sh for topic and auth details.
+ntfy_server = "https://ntfy.sh"
+ntfy_topic = None
+ntfy_access_token = None
+ntfy_default_priority = "default"
+ntfy_default_tags = ["kiln"]
+
+# Runtime abnormality alerts (best-practice defaults: threshold + cooldown)
+# Send a deviation alert when kiln temp drops quickly while controller is trying
+# to heat and temperature lags target.
+notifications_alert_cooldown_seconds = 300
+notifications_deviation_drop_window_seconds = 45
+notifications_deviation_drop_threshold = 20
+notifications_deviation_min_error = 35
+notifications_deviation_min_target_temp = 300
+notifications_deviation_cooldown_seconds = 300
+
+# Notify each time measured temperature crosses this interval.
+notifications_temp_milestone_interval = 500
+
 ########################################################################
 # Cost Information
 #
@@ -92,7 +138,6 @@ try:
     gpio_heat_invert = False #invert the output state
 
     # Buzzer Configuration
-    gpio_buzzer = 12        # BCM pin for piezo buzzer
     gpio_buzzer = 12        # BCM pin for piezo buzzer
 except (NotImplementedError,AttributeError):
     print("not running on blinka recognized board, probably a simulation")
@@ -324,9 +369,9 @@ throttle_percent = 20
 ########################################################################
 # Local Configuration Override
 ########################################################################
-# This attempts to import from 'secrets.py' to override any settings above.
-# Use this for passwords, specific machine configuration, etc.
+# Optional: put machine-specific credentials/tokens in secrets.py.
+# Any variable defined there overrides values above.
 try:
-    from secrets import *
+    from secrets import *  # noqa: F401,F403
 except ImportError:
     pass

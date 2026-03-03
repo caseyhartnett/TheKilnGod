@@ -20,6 +20,13 @@ import config
 logging.basicConfig(level=config.log_level, format=config.log_format)
 log = logging.getLogger("kiln-controller")
 log.info("Starting kiln controller")
+log.info(
+    "GPIO config: heat_pin=%s heat_invert=%s buzzer_pin=%s simulate=%s",
+    getattr(config, 'gpio_heat', None),
+    getattr(config, 'gpio_heat_invert', None),
+    getattr(config, 'gpio_buzzer', None),
+    getattr(config, 'simulate', None),
+)
 
 script_dir = os.path.dirname(os.path.realpath(__file__))
 sys.path.insert(0, script_dir + '/lib/')
@@ -30,6 +37,7 @@ from ovenWatcher import OvenWatcher
 from display_example import DisplayUpdater
 from homeassistant_mqtt import HomeAssistantMQTT
 from buzzer import Buzzer
+from notifications import NotificationManager
 
 app = bottle.Bottle()
 
@@ -41,12 +49,199 @@ if not config.simulate:
     except Exception as e:
         log.warning(f"Failed to initialize buzzer: {e}")
 
+def get_request_token():
+    token = bottle.request.get_header('X-API-Token')
+    if not token:
+        token = bottle.request.query.get('token')
+    return token
+
+def get_token_role(token):
+    monitor_token = getattr(config, 'api_monitor_token', None)
+    control_token = getattr(config, 'api_control_token', None)
+    if control_token and token == control_token:
+        return 'control'
+    if monitor_token and token == monitor_token:
+        return 'monitor'
+    if not monitor_token and not control_token:
+        return 'open'
+    return 'invalid'
+
+def control_authorized():
+    monitor_token = getattr(config, 'api_monitor_token', None)
+    control_token = getattr(config, 'api_control_token', None)
+    got = get_request_token()
+
+    if control_token:
+        return got == control_token
+    if monitor_token:
+        return got == monitor_token
+    return True
+
+def monitor_authorized():
+    monitor_token = getattr(config, 'api_monitor_token', None)
+    control_token = getattr(config, 'api_control_token', None)
+    got = get_request_token()
+
+    if monitor_token:
+        return got == monitor_token or (control_token and got == control_token)
+    if control_token:
+        return got == control_token
+    return True
+
+def deny_http_unauthorized():
+    bottle.response.status = 401
+    return {"success": False, "error": "unauthorized"}
+
+def deny_ws_unauthorized(wsock):
+    try:
+        wsock.send(json.dumps({"success": False, "error": "unauthorized"}))
+    except Exception:
+        pass
+    try:
+        wsock.close()
+    except Exception:
+        pass
+
+def load_run_health_exclusions():
+    path = getattr(config, 'run_health_exclusions_file', None)
+    if not path:
+        return set()
+    if not os.path.exists(path):
+        return set()
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            obj = json.load(f)
+        if isinstance(obj, list):
+            return set(str(x) for x in obj)
+        return set()
+    except Exception as exc:
+        log.error("failed reading run health exclusions: %s", exc)
+        return set()
+
+def save_run_health_exclusions(exclusions):
+    path = getattr(config, 'run_health_exclusions_file', None)
+    if not path:
+        return False
+    try:
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(sorted(list(exclusions)), f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as exc:
+        log.error("failed writing run health exclusions: %s", exc)
+        return False
+
+def load_run_health_rows(limit=1000):
+    path = getattr(config, 'run_health_history_file', None)
+    rows = []
+    if not path or not os.path.exists(path):
+        return rows
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                    if isinstance(row, dict):
+                        rows.append(row)
+                except json.JSONDecodeError:
+                    continue
+    except Exception as exc:
+        log.error("failed reading run health history: %s", exc)
+        return []
+    if limit and len(rows) > limit:
+        rows = rows[-1 * limit:]
+    return rows
+
+def audit_command(action, authorized, source='http', details=None):
+    if not getattr(config, 'command_audit_enabled', True):
+        return
+    if details is None:
+        details = {}
+    token = get_request_token()
+    role = get_token_role(token)
+    client = bottle.request.remote_addr or bottle.request.environ.get('REMOTE_ADDR') or 'unknown'
+    entry = {
+        'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'source': source,
+        'action': action,
+        'authorized': bool(authorized),
+        'role': role,
+        'client': client,
+        'details': details,
+    }
+    try:
+        with open(config.command_audit_log_file, 'a', encoding='utf-8') as f:
+            f.write(json.dumps(entry) + '\n')
+    except Exception as exc:
+        log.error("failed to write audit log: %s", exc)
+
+@app.get('/api/run-health')
+def handle_run_health_get():
+    if not monitor_authorized():
+        return deny_http_unauthorized()
+    try:
+        limit = int(bottle.request.query.get('limit', '100'))
+    except ValueError:
+        limit = 100
+    limit = max(1, min(5000, limit))
+
+    include_excluded = str(bottle.request.query.get('include_excluded', '0')).lower() in ('1', 'true', 'yes')
+    exclusions = load_run_health_exclusions()
+    rows = load_run_health_rows(limit=limit)
+
+    out = []
+    for row in rows:
+        run_id = str(row.get('run_id', ''))
+        excluded = run_id in exclusions if run_id else False
+        row_out = dict(row)
+        row_out['excluded'] = excluded
+        if include_excluded or not excluded:
+            out.append(row_out)
+
+    return {
+        'success': True,
+        'rows': out,
+        'exclusions': sorted(list(exclusions)),
+        'returned': len(out),
+        'limit': limit,
+    }
+@app.post('/api/run-health/exclusions')
+def handle_run_health_exclusions():
+    if not control_authorized():
+        return deny_http_unauthorized()
+
+    body = bottle.request.json or {}
+    run_id = body.get('run_id')
+    excluded = bool(body.get('excluded', True))
+    if not run_id:
+        bottle.response.status = 400
+        return {'success': False, 'error': 'run_id is required'}
+
+    exclusions = load_run_health_exclusions()
+    run_id = str(run_id)
+    if excluded:
+        exclusions.add(run_id)
+    else:
+        exclusions.discard(run_id)
+
+    if not save_run_health_exclusions(exclusions):
+        bottle.response.status = 500
+        return {'success': False, 'error': 'failed to save exclusions'}
+    audit_command('run_health_exclusion_set', True, source='http', details={'run_id': run_id, 'excluded': excluded})
+    return {'success': True, 'run_id': run_id, 'excluded': excluded}
+
 if config.simulate == True:
     log.info("this is a simulation")
     oven = SimulatedOven()
 else:
     log.info("this is a real kiln")
     oven = RealOven(buzzer=buzzer)
+
+notifier = NotificationManager()
+notifier.start()
+oven.set_notifier(notifier)
 ovenWatcher = OvenWatcher(oven)
 # this ovenwatcher is used in the oven class for restarts
 oven.set_ovenwatcher(ovenWatcher)
@@ -75,21 +270,31 @@ def index():
 def state():
     return bottle.redirect('/picoreflow/state.html')
 
+@app.route('/v2')
+def v2():
+    return bottle.redirect('/picoreflow/v2/index.html')
+
 @app.get('/api/stats')
 def handle_api():
     log.info("/api/stats command received")
+    if not monitor_authorized():
+        return deny_http_unauthorized()
     if hasattr(oven,'pid'):
         if hasattr(oven.pid,'pidstats'):
-            return json.dumps(oven.pid.pidstats)
+            stats = dict(oven.pid.pidstats)
+            stats["telemetry"] = oven.get_state().get("telemetry", {})
+            return json.dumps(stats)
 
 
 @app.post('/api')
 def handle_api():
     log.info("/api is alive")
 
-
     # run a kiln schedule
     if bottle.request.json['cmd'] == 'run':
+        if not control_authorized():
+            audit_command('run', False, source='http', details={'profile': bottle.request.json.get('profile')})
+            return deny_http_unauthorized()
         wanted = bottle.request.json['profile']
         log.info('api requested run of profile = %s' % wanted)
 
@@ -114,30 +319,53 @@ def handle_api():
         profile = Profile(profile_json)
         oven.run_profile(profile, startat=startat, allow_seek=allow_seek)
         ovenWatcher.record(profile)
+        audit_command('run', True, source='http', details={'profile': wanted, 'startat': startat})
 
     if bottle.request.json['cmd'] == 'pause':
+        if not control_authorized():
+            audit_command('pause', False, source='http')
+            return deny_http_unauthorized()
         log.info("api pause command received")
         oven.state = 'PAUSED'
+        oven.emit_notification('run_paused', {'profile': oven.profile.name if oven.profile else None, 'run_id': oven.current_run_id})
+        audit_command('pause', True, source='http')
 
     if bottle.request.json['cmd'] == 'resume':
+        if not control_authorized():
+            audit_command('resume', False, source='http')
+            return deny_http_unauthorized()
         log.info("api resume command received")
         oven.state = 'RUNNING'
+        oven.emit_notification('run_resumed', {'profile': oven.profile.name if oven.profile else None, 'run_id': oven.current_run_id})
+        audit_command('resume', True, source='http')
 
     if bottle.request.json['cmd'] == 'stop':
+        if not control_authorized():
+            audit_command('stop', False, source='http')
+            return deny_http_unauthorized()
         log.info("api stop command received")
-        oven.abort_run()
+        oven.abort_run(reason='manual_stop_http')
+        audit_command('stop', True, source='http')
 
     if bottle.request.json['cmd'] == 'memo':
+        if not control_authorized():
+            audit_command('memo', False, source='http')
+            return deny_http_unauthorized()
         log.info("api memo command received")
         memo = bottle.request.json['memo']
         log.info("memo=%s" % (memo))
+        audit_command('memo', True, source='http', details={'memo': memo})
 
     # get stats during a run
     if bottle.request.json['cmd'] == 'stats':
+        if not monitor_authorized():
+            return deny_http_unauthorized()
         log.info("api stats command received")
         if hasattr(oven,'pid'):
             if hasattr(oven.pid,'pidstats'):
-                return json.dumps(oven.pid.pidstats)
+                stats = dict(oven.pid.pidstats)
+                stats["telemetry"] = oven.get_state().get("telemetry", {})
+                return json.dumps(stats)
 
     return { "success" : True }
 
@@ -173,6 +401,12 @@ def get_websocket_from_request():
 @app.route('/control')
 def handle_control():
     wsock = get_websocket_from_request()
+    if not control_authorized():
+        audit_command('ws_control_connect', False, source='websocket')
+        deny_ws_unauthorized(wsock)
+        log.warning("websocket (control) unauthorized")
+        return
+    audit_command('ws_control_connect', True, source='websocket')
     log.info("websocket (control) opened")
     while True:
         try:
@@ -188,6 +422,7 @@ def handle_control():
                         profile = Profile(profile_json)
                     oven.run_profile(profile)
                     ovenWatcher.record(profile)
+                    audit_command('ws_run', True, source='websocket', details={'profile': profile_obj.get('name') if profile_obj else None})
                 elif msgdict.get("cmd") == "SIMULATE":
                     log.info("SIMULATE command received")
                     #profile_obj = msgdict.get('profile')
@@ -201,7 +436,8 @@ def handle_control():
                     #simulation_watcher.record(profile)
                 elif msgdict.get("cmd") == "STOP":
                     log.info("Stop command received")
-                    oven.abort_run()
+                    oven.abort_run(reason='manual_stop_ws')
+                    audit_command('ws_stop', True, source='websocket')
             time.sleep(1)
         except WebSocketError as e:
             log.error(e)
@@ -212,6 +448,12 @@ def handle_control():
 @app.route('/storage')
 def handle_storage():
     wsock = get_websocket_from_request()
+    if not monitor_authorized():
+        audit_command('ws_storage_connect', False, source='websocket')
+        deny_ws_unauthorized(wsock)
+        log.warning("websocket (storage) unauthorized")
+        return
+    audit_command('ws_storage_connect', True, source='websocket')
     log.info("websocket (storage) opened")
     while True:
         try:
@@ -228,14 +470,24 @@ def handle_storage():
             if message == "GET":
                 log.info("GET command received")
                 wsock.send(get_profiles())
+                audit_command('ws_storage_get', True, source='websocket')
             elif msgdict.get("cmd") == "DELETE":
+                if not control_authorized():
+                    audit_command('ws_storage_delete', False, source='websocket', details={'profile': msgdict.get('profile', {}).get('name')})
+                    wsock.send(json.dumps({"success": False, "error": "unauthorized"}))
+                    continue
                 log.info("DELETE command received")
                 profile_obj = msgdict.get('profile')
                 if delete_profile(profile_obj):
                   msgdict["resp"] = "OK"
                 wsock.send(json.dumps(msgdict))
+                audit_command('ws_storage_delete', True, source='websocket', details={'profile': profile_obj.get('name') if profile_obj else None})
                 #wsock.send(get_profiles())
             elif msgdict.get("cmd") == "PUT":
+                if not control_authorized():
+                    audit_command('ws_storage_put', False, source='websocket', details={'profile': msgdict.get('profile', {}).get('name')})
+                    wsock.send(json.dumps({"success": False, "error": "unauthorized"}))
+                    continue
                 log.info("PUT command received")
                 profile_obj = msgdict.get('profile')
                 #force = msgdict.get('force', False)
@@ -250,6 +502,7 @@ def handle_storage():
 
                     wsock.send(json.dumps(msgdict))
                     wsock.send(get_profiles())
+                    audit_command('ws_storage_put', True, source='websocket', details={'profile': profile_obj.get('name') if profile_obj else None, 'result': msgdict.get('resp')})
             time.sleep(1) 
         except WebSocketError:
             break
@@ -259,6 +512,10 @@ def handle_storage():
 @app.route('/config')
 def handle_config():
     wsock = get_websocket_from_request()
+    if not monitor_authorized():
+        deny_ws_unauthorized(wsock)
+        log.warning("websocket (config) unauthorized")
+        return
     log.info("websocket (config) opened")
     while True:
         try:
@@ -273,6 +530,10 @@ def handle_config():
 @app.route('/status')
 def handle_status():
     wsock = get_websocket_from_request()
+    if not monitor_authorized():
+        deny_ws_unauthorized(wsock)
+        log.warning("websocket (status) unauthorized")
+        return
     ovenWatcher.add_observer(wsock)
     log.info("websocket (status) opened")
     while True:

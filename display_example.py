@@ -31,21 +31,66 @@ class DisplayUpdater(threading.Thread):
         self.oven = oven
         self.update_interval = update_interval
         self.display = KilnDisplay()
-        
+        self.last_state = None
+        self.last_profile = None
+        self.last_retry = 0.0
+        self.retry_interval = 30.0
+
         if self.display.initialized:
             self.display.show_message("Kiln Controller", line=2)
             time.sleep(1)
             log.info("Display updater initialized")
         else:
-            log.warning("Display not initialized, updater will not update display")
+            log.warning("Display not initialized, updater will retry")
+
+    def _retry_init_display(self):
+        now = time.time()
+        if now - self.last_retry < self.retry_interval:
+            return
+        self.last_retry = now
+        self.display = KilnDisplay()
+        if self.display.initialized:
+            self.display.show_message("Display Ready", line=2)
+            time.sleep(0.5)
+            log.info("Display re-initialized")
+
+    def _render_transition_banner(self, state, profile):
+        if not self.display.initialized:
+            return
+        profile_name = (profile or "")[:18]
+        if state == "RUNNING":
+            self.display.show_message("Firing Started", line=1)
+            if profile_name:
+                self.display.show_message(profile_name, line=2)
+        elif state == "PAUSED":
+            self.display.show_message("Firing Paused", line=1)
+            if profile_name:
+                self.display.show_message(profile_name, line=2)
+        elif state == "IDLE":
+            self.display.show_message("Kiln Idle", line=1)
+        else:
+            self.display.show_message(f"State: {state}", line=1)
+        time.sleep(0.8)
     
     def run(self):
         """Main loop that updates the display"""
         while True:
             try:
+                if not self.display.initialized:
+                    self._retry_init_display()
                 if self.display.initialized:
                     # Get current state from oven
                     state = self.oven.get_state()
+                    current_state = state.get('state', 'IDLE')
+                    current_profile = state.get('profile')
+
+                    # Show a short transition banner on state/profile changes.
+                    if (self.last_state != current_state) or (
+                        current_state == "RUNNING" and self.last_profile != current_profile
+                    ):
+                        self._render_transition_banner(current_state, current_profile)
+                        self.last_state = current_state
+                        self.last_profile = current_profile
                     
                     # Update display with current state
                     self.display.update(state, temp_scale=config.temp_scale)
