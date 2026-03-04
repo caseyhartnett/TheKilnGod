@@ -76,6 +76,12 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
   - Inside control window, PID modulation
 - Optional kiln catch-up mode:
   - If kiln is too cold/hot relative to target window, schedule time is shifted until kiln catches up
+- Catch-up supervisor (shadow mode):
+  - Computes multi-window lag/rise/duty trend metrics during runs
+  - Produces `catchup_shadow_*` telemetry fields for diagnostics
+  - Writes JSON-lines decisions to `storage/logs/catchup-shadow.jsonl`
+  - Supports transient-drop holdoff to avoid overreacting to short disturbances (for example door-open events)
+  - Default `shadow` mode does not change heater control or abort runs
 - Low-temperature throttling options (`throttle_below_temp`, `throttle_percent`)
 - Real-time computed heating rate (`degrees/hour`)
 
@@ -94,6 +100,9 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
 - Thermocouple health tracking:
   - Sliding-window error percentage (`ThermocoupleTracker`)
   - Abort if error rate crosses threshold (unless configured to ignore)
+- Power/current anomaly detection (optional power sensor):
+  - warns when heater is commanded but current stays below threshold for a sustained window
+  - warns when power sensor feed is stale
 - Mapped thermocouple fault classes (open circuit, short, voltage/range faults, etc.)
 - Configurable ignore flags for specific fault classes (allows continuing run in known noisy environments)
 
@@ -108,6 +117,7 @@ Project goal today: turn a Raspberry Pi (and other Blinka-supported boards) into
   - Profile name
   - PID stats (P, I, D components)
   - Catch-up status
+  - Optional line voltage/current/power telemetry
   - Running cost estimate
 
 ### 9) Cost and Runtime Metrics

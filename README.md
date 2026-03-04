@@ -176,6 +176,70 @@ For security, keep sensitive values (passwords/tokens) in `secrets.py`, which ov
 | run_health_history_enabled | True | Enable per-run health summary logging |
 | run_health_history_file | `<repo>/storage/logs/run-health-history.jsonl` | JSON-lines run health history used for trend charting |
 | run_health_exclusions_file | `<repo>/storage/logs/run-health-exclusions.json` | JSON list of run IDs excluded from health trend analysis |
+| power_sensor_enabled | False | Enable optional PZEM-004T power/current/voltage reader |
+| power_sensor_port | `/dev/ttyUSB0` | UART serial device for PZEM-004T |
+| power_sensor_scale_factor | 2.0 | Multiplier applied to current/power/energy values |
+| power_sensor_current_threshold_amps | 0.25 | Minimum current expected while heater is commanded on |
+| power_sensor_no_current_window_seconds | 30 | Time window before raising no-current warning |
+| power_sensor_stale_alert_seconds | 30 | Time without new power samples before stale warning |
+| power_telemetry_log_file | `<repo>/storage/logs/power-telemetry.jsonl` | JSON-lines per-sample power telemetry log |
+| catchup_supervisor_enabled | True | Enable catch-up supervisor evaluator |
+| catchup_supervisor_mode | shadow | `shadow` logs decisions only, `enforce` reserved for future automatic action |
+| catchup_shadow_log_file | `<repo>/storage/logs/catchup-shadow.jsonl` | JSON-lines stream of supervisor decisions and trend metrics |
+
+### Catch-Up Supervisor (Shadow Mode)
+
+The controller now includes a catch-up supervisor designed to detect prolonged inability to meet profile temperature targets while minimizing false positives.
+
+In the current default mode (`catchup_supervisor_mode = "shadow"`), it does **not** change relay output, pause, or abort runs. It only:
+
+- evaluates lag/trend behavior each control cycle
+- emits telemetry fields under `telemetry.catchup_*`
+- writes periodic decisions to `storage/logs/catchup-shadow.jsonl`
+- optionally emits `issue_detected` notifications:
+  - `catchup_shadow_would_extend`
+  - `catchup_shadow_would_abort`
+
+This allows safe threshold tuning before any enforcement behavior is enabled.
+
+Shadow evaluator design:
+
+- multi-window trend checks (`fast`, `trend`, `confidence`)
+- sustained lag scoring (CUSUM-style accumulation)
+- high-duty + low-rise stall detection
+- transient drop holdoff (helps ignore short door-open disturbances)
+
+Key knobs in `config.py`:
+
+- `catchup_supervisor_error_threshold`
+- `catchup_supervisor_high_duty_threshold_pct`
+- `catchup_supervisor_min_rise_rate_deg_per_hour`
+- `catchup_supervisor_stall_rise_rate_deg_per_hour`
+- `catchup_supervisor_abort_persistence_seconds`
+- `catchup_supervisor_cusum_alarm_deg_seconds`
+- `catchup_supervisor_transient_drop_threshold`
+- `catchup_supervisor_transient_holdoff_seconds`
+
+### Current/Voltage Detection
+
+The controller supports optional live electrical telemetry from a PZEM-004T (`power_sensor_enabled = True`).
+
+What it does:
+
+- publishes line voltage/current/power snapshots and rolling averages in telemetry
+- logs per-sample electrical telemetry to `storage/logs/power-telemetry.jsonl`
+- raises `issue_detected` warnings when:
+  - heater is commanded while current stays below threshold (`heater_commanded_no_current`)
+  - power sensor data is stale for too long (`power_sensor_stale`)
+
+Related config settings:
+
+- `power_sensor_current_threshold_amps`
+- `power_sensor_mismatch_min_error`
+- `power_sensor_no_current_window_seconds`
+- `power_sensor_mismatch_cooldown_seconds`
+- `power_sensor_stale_alert_seconds`
+- `power_sensor_stale_cooldown_seconds`
 
 ## Home Assistant Integration
 

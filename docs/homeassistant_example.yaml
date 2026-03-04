@@ -28,8 +28,28 @@ mqtt:
       state_topic: "kiln/sensor/heat_rate/state"
       unit_of_measurement: "°/h"
 
+    - name: "Kiln Line Voltage"
+      state_topic: "kiln/sensor/line_voltage/state"
+      unit_of_measurement: "V"
+      device_class: voltage
+
+    - name: "Kiln Line Current"
+      state_topic: "kiln/sensor/line_current/state"
+      unit_of_measurement: "A"
+      device_class: current
+
+    - name: "Kiln Line Power"
+      state_topic: "kiln/sensor/line_power/state"
+      unit_of_measurement: "W"
+      device_class: power
+
   binary_sensor:
     - name: "Kiln Heat"
       state_topic: "kiln/binary_sensor/heat/state"
+      payload_on: "ON"
+      payload_off: "OFF"
+
+    - name: "Kiln Power Sensor OK"
+      state_topic: "kiln/binary_sensor/power_sensor_ok/state"
       payload_on: "ON"
       payload_off: "OFF"

@@ -17,6 +17,13 @@ interface RunPoint {
   clockSec: number
 }
 
+interface PowerPoint {
+  runtimeHours: number
+  current: number | null
+  voltage: number | null
+  clockSec: number
+}
+
 interface RunSummary {
   completedAt: number
   profile: string
@@ -110,6 +117,7 @@ export default function App() {
   const [monitorToken, setMonitorToken] = useState<string>(() => window.localStorage.getItem('kiln_monitor_token') ?? '')
   const [controlToken, setControlToken] = useState<string>(() => window.localStorage.getItem('kiln_api_token') ?? '')
   const [runPoints, setRunPoints] = useState<RunPoint[]>([])
+  const [powerPoints, setPowerPoints] = useState<PowerPoint[]>([])
   const [runSummary, setRunSummary] = useState<RunSummary | null>(null)
   const [healthRows, setHealthRows] = useState<RunHealthEntry[]>([])
   const [healthLimit, setHealthLimit] = useState<number>(40)
@@ -233,7 +241,11 @@ export default function App() {
             duty_cycle_5m: 43 + Math.sin(elapsedSec / 11) * 18,
             overshoot_max_run: 9.3,
             sensor_error_rate_5m: Math.max(0, 2 + Math.sin(elapsedSec / 20) * 2),
-            time_catching_up_pct_run: 4 + Math.max(0, Math.sin(elapsedSec / 40) * 7)
+            time_catching_up_pct_run: 4 + Math.max(0, Math.sin(elapsedSec / 40) * 7),
+            line_current_now: (16 + Math.sin(elapsedSec / 9) * 2.3) * heatOut,
+            line_voltage_now: 239 + Math.sin(elapsedSec / 20) * 1.8,
+            line_power_now: 7500 * heatOut + Math.sin(elapsedSec / 11) * 120,
+            line_energy_wh_now: elapsedSec * 2.2
           }
         }
 
@@ -252,6 +264,21 @@ export default function App() {
             return prev
           }
           return [...prev, { runtimeHours, temperature: ispoint, target: setpoint, clockSec: nowSec }].slice(-50000)
+        })
+        setPowerPoints((prev) => {
+          const runtimeHours = elapsedSec / 3600
+          if (prev.length && Math.abs(prev[prev.length - 1].runtimeHours - runtimeHours) < 0.01) {
+            return prev
+          }
+          return [
+            ...prev,
+            {
+              runtimeHours,
+              current: msg.telemetry?.line_current_now ?? null,
+              voltage: msg.telemetry?.line_voltage_now ?? null,
+              clockSec: nowSec
+            }
+          ].slice(-50000)
         })
       }, 1000)
 
@@ -287,6 +314,7 @@ export default function App() {
           const nowSec = Date.now() / 1000
           if (runtime < lastRuntimeRef.current - 30) {
             setRunPoints([])
+            setPowerPoints([])
             addEvent('info', 'Run timeline reset for new run')
           }
           lastRuntimeRef.current = runtime
@@ -297,6 +325,21 @@ export default function App() {
             }
             const next = [...prev, { runtimeHours, temperature: msg.temperature!, target: msg.target!, clockSec: nowSec }]
             return next.slice(-50000)
+          })
+          setPowerPoints((prev) => {
+            const runtimeHours = runtime / 3600
+            if (prev.length && Math.abs(prev[prev.length - 1].runtimeHours - runtimeHours) < 0.01) {
+              return prev
+            }
+            return [
+              ...prev,
+              {
+                runtimeHours,
+                current: msg.telemetry?.line_current_now ?? null,
+                voltage: msg.telemetry?.line_voltage_now ?? null,
+                clockSec: nowSec
+              }
+            ].slice(-50000)
           })
         }
 
@@ -543,6 +586,20 @@ export default function App() {
     () => profiles.find((p) => p.name === selectedProfile),
     [profiles, selectedProfile]
   )
+  const runProfile = useMemo(() => {
+    const activeName = status.profile?.trim()
+    if (activeName) {
+      return profiles.find((p) => p.name === activeName) ?? activeProfile
+    }
+    return activeProfile
+  }, [activeProfile, profiles, status.profile])
+  const runDurationHours = useMemo(() => {
+    const runtimeHoursFromState = status.totaltime ? status.totaltime / 3600 : 0
+    const runtimeHoursFromSensor = runPoints[runPoints.length - 1]?.runtimeHours ?? 0
+    const profileEndSec = runProfile && runProfile.data.length ? runProfile.data[runProfile.data.length - 1][0] : 0
+    const runtimeHoursFromProfile = profileEndSec / 3600
+    return Math.max(0.1, runtimeHoursFromState, runtimeHoursFromSensor, runtimeHoursFromProfile)
+  }, [runPoints, runProfile, status.totaltime])
 
   const builderResult = useMemo(() => buildPointsFromBuilder(), [builderStartTemp, builderSegments])
   const builderPoints = builderResult.points
@@ -798,7 +855,39 @@ export default function App() {
     const plotLeft = 56
     const plotRight = 16
     const plotWidth = width - plotLeft - plotRight
-    if (runPoints.length < 2) {
+    const xMaxHours = runDurationHours
+    const startH = Math.max(0, Math.min(viewStartHour, xMaxHours - 0.01))
+    const endH = Math.max(startH + 0.01, Math.min(viewEndHour, xMaxHours))
+    const sensorSource = runPoints.filter((p) => p.runtimeHours >= startH && p.runtimeHours <= endH)
+    const profileSource = (runProfile?.data ?? []).map(([sec, target]) => ({ runtimeHours: sec / 3600, target }))
+
+    const targetAtRuntime = (runtimeHours: number): number | null => {
+      if (!profileSource.length) return null
+      if (runtimeHours <= profileSource[0].runtimeHours) return profileSource[0].target
+      for (let i = 1; i < profileSource.length; i += 1) {
+        const left = profileSource[i - 1]
+        const right = profileSource[i]
+        if (runtimeHours <= right.runtimeHours) {
+          const span = Math.max(0.0001, right.runtimeHours - left.runtimeHours)
+          const f = (runtimeHours - left.runtimeHours) / span
+          return left.target + (right.target - left.target) * f
+        }
+      }
+      return profileSource[profileSource.length - 1].target
+    }
+
+    const targetSeries = profileSource.length
+      ? Array.from({ length: Math.max(8, Math.ceil((endH - startH) * 60)) + 1 }).map((_, i, arr) => {
+          const h = startH + ((endH - startH) * i) / Math.max(1, arr.length - 1)
+          return { runtimeHours: h, target: targetAtRuntime(h) ?? profileSource[profileSource.length - 1].target }
+        })
+      : sensorSource.map((p) => ({ runtimeHours: p.runtimeHours, target: p.target }))
+
+    const yValues = [
+      ...sensorSource.map((p) => p.temperature),
+      ...targetSeries.map((p) => p.target)
+    ]
+    if (!yValues.length) {
       return {
         width,
         height,
@@ -808,19 +897,12 @@ export default function App() {
         targetPoints: '',
         tickData: [] as Array<{ x: number; h: string; clock: string }>,
         yTicks: [] as Array<{ y: number; label: string }>,
-        hover: null as null | { x: number; yTemp: number; yTarget: number; label: string; temp: number; target: number; error: number }
+        hover: null as null | { x: number; yTemp: number | null; yTarget: number; label: string; temp: number | null; target: number; error: number | null }
       }
     }
 
-    const runtimeHoursFromProfile = status.totaltime ? status.totaltime / 3600 : runPoints[runPoints.length - 1].runtimeHours
-    const xMaxHours = Math.max(runtimeHoursFromProfile, runPoints[runPoints.length - 1].runtimeHours, 0.1)
-    const startH = Math.max(0, Math.min(viewStartHour, xMaxHours - 0.01))
-    const endH = Math.max(startH + 0.01, Math.min(viewEndHour, xMaxHours))
-    const pointsInView = runPoints.filter((p) => p.runtimeHours >= startH && p.runtimeHours <= endH)
-    const source = pointsInView.length >= 2 ? pointsInView : runPoints
-
-    const minTemp = Math.min(...source.map((p) => Math.min(p.temperature, p.target)))
-    const maxTemp = Math.max(...source.map((p) => Math.max(p.temperature, p.target)))
+    const minTemp = Math.min(...yValues)
+    const maxTemp = Math.max(...yValues)
     const range = Math.max(20, maxTemp - minTemp)
     const yMin = minTemp - range * 0.08
     const yMax = maxTemp + range * 0.08
@@ -828,12 +910,12 @@ export default function App() {
     const mapX = (h: number) => plotLeft + (((h - startH) / (endH - startH)) * plotWidth)
     const mapY = (t: number) => height - ((t - yMin) / (yMax - yMin)) * height
 
-    const tempPoints = source.map((p) => `${mapX(p.runtimeHours).toFixed(1)},${mapY(p.temperature).toFixed(1)}`).join(' ')
-    const targetPoints = source.map((p) => `${mapX(p.runtimeHours).toFixed(1)},${mapY(p.target).toFixed(1)}`).join(' ')
+    const tempPoints = sensorSource.map((p) => `${mapX(p.runtimeHours).toFixed(1)},${mapY(p.temperature).toFixed(1)}`).join(' ')
+    const targetPoints = targetSeries.map((p) => `${mapX(p.runtimeHours).toFixed(1)},${mapY(p.target).toFixed(1)}`).join(' ')
 
     const ticks = 6
     const first = runPoints[0]
-    const estimatedStart = first.clockSec - first.runtimeHours * 3600
+    const estimatedStart = first ? first.clockSec - first.runtimeHours * 3600 : Date.now() / 1000
     const tickData = Array.from({ length: ticks + 1 }).map((_, idx) => {
       const h = startH + ((endH - startH) / ticks) * idx
       const x = mapX(h)
@@ -853,7 +935,95 @@ export default function App() {
       return { y: mapY(temp), label: temp.toFixed(0) }
     })
 
-    let hover = null as null | { x: number; yTemp: number; yTarget: number; label: string; temp: number; target: number; error: number }
+    let hover = null as null | { x: number; yTemp: number | null; yTarget: number; label: string; temp: number | null; target: number; error: number | null }
+    if (hoverRuntimeHour != null) {
+      let nearestSensor: RunPoint | null = null
+      const latestRuntime = runPoints[runPoints.length - 1]?.runtimeHours ?? -1
+      if (runPoints.length && hoverRuntimeHour <= latestRuntime + 0.01) {
+        nearestSensor = runPoints[0]
+        let best = Math.abs(runPoints[0].runtimeHours - hoverRuntimeHour)
+        for (let i = 1; i < runPoints.length; i += 1) {
+          const d = Math.abs(runPoints[i].runtimeHours - hoverRuntimeHour)
+          if (d < best) {
+            best = d
+            nearestSensor = runPoints[i]
+          }
+        }
+      }
+
+      const target = targetAtRuntime(hoverRuntimeHour) ?? (nearestSensor?.target ?? 0)
+      const clock = new Date((estimatedStart + hoverRuntimeHour * 3600) * 1000)
+      const hh = String(clock.getHours()).padStart(2, '0')
+      const mm = String(clock.getMinutes()).padStart(2, '0')
+      hover = {
+        x: mapX(hoverRuntimeHour),
+        yTemp: nearestSensor ? mapY(nearestSensor.temperature) : null,
+        yTarget: mapY(target),
+        label: `${hoverRuntimeHour.toFixed(2)}h | ${hh}:${mm}`,
+        temp: nearestSensor ? nearestSensor.temperature : null,
+        target,
+        error: nearestSensor ? target - nearestSensor.temperature : null
+      }
+    }
+
+    return { width, height, plotLeft, plotWidth, tempPoints, targetPoints, tickData, yTicks, hover }
+  }, [hoverRuntimeHour, runDurationHours, runPoints, runProfile, viewEndHour, viewStartHour])
+
+  const powerChart = useMemo(() => {
+    const width = 940
+    const height = 150
+    const plotLeft = 56
+    const plotRight = 16
+    const plotWidth = width - plotLeft - plotRight
+    const xMaxHours = runDurationHours
+    const startH = Math.max(0, Math.min(viewStartHour, xMaxHours - 0.01))
+    const endH = Math.max(startH + 0.01, Math.min(viewEndHour, xMaxHours))
+    const source = powerPoints.filter((p) => p.runtimeHours >= startH && p.runtimeHours <= endH)
+
+    const mapX = (h: number) => plotLeft + (((h - startH) / (endH - startH)) * plotWidth)
+    const buildSeries = (valueOf: (p: PowerPoint) => number | null) =>
+      source
+        .filter((p) => valueOf(p) != null)
+        .map((p) => ({ runtimeHours: p.runtimeHours, value: valueOf(p)! }))
+
+    const currentSeries = buildSeries((p) => p.current)
+    const voltageSeries = buildSeries((p) => p.voltage)
+
+    const mapFor = (series: Array<{ runtimeHours: number; value: number }>, minFloor: number) => {
+      if (!series.length) {
+        return { points: '', ticks: [] as Array<{ y: number; label: string }>, mapY: (_v: number) => height }
+      }
+      const minV = Math.min(minFloor, ...series.map((p) => p.value))
+      const maxV = Math.max(...series.map((p) => p.value))
+      const span = Math.max(0.5, maxV - minV)
+      const yMin = minV - span * 0.1
+      const yMax = maxV + span * 0.1
+      const mapY = (v: number) => height - ((v - yMin) / (yMax - yMin)) * height
+      const points = series.map((p) => `${mapX(p.runtimeHours).toFixed(1)},${mapY(p.value).toFixed(1)}`).join(' ')
+      const ticks = Array.from({ length: 4 }).map((_, idx) => {
+        const f = idx / 3
+        const value = yMax - (yMax - yMin) * f
+        return { y: mapY(value), label: value.toFixed(1) }
+      })
+      return { points, ticks, mapY }
+    }
+
+    const currentPlot = mapFor(currentSeries, 0)
+    const voltagePlot = mapFor(voltageSeries, 220)
+
+    const ticks = 6
+    const first = powerPoints[0] ?? runPoints[0]
+    const estimatedStart = first ? first.clockSec - first.runtimeHours * 3600 : Date.now() / 1000
+    const tickData = Array.from({ length: ticks + 1 }).map((_, idx) => {
+      const h = startH + ((endH - startH) / ticks) * idx
+      const x = mapX(h)
+      const clock = new Date((estimatedStart + h * 3600) * 1000)
+      const hh = String(clock.getHours()).padStart(2, '0')
+      const mm = String(clock.getMinutes()).padStart(2, '0')
+      return { x, h: `${h.toFixed(1)}h`, clock: `${hh}:${mm}` }
+    })
+
+    let hover = null as null | { x: number; current: number | null; voltage: number | null; label: string }
     if (hoverRuntimeHour != null && source.length) {
       let nearest = source[0]
       let best = Math.abs(source[0].runtimeHours - hoverRuntimeHour)
@@ -869,17 +1039,25 @@ export default function App() {
       const mm = String(clock.getMinutes()).padStart(2, '0')
       hover = {
         x: mapX(nearest.runtimeHours),
-        yTemp: mapY(nearest.temperature),
-        yTarget: mapY(nearest.target),
-        label: `${nearest.runtimeHours.toFixed(2)}h | ${hh}:${mm}`,
-        temp: nearest.temperature,
-        target: nearest.target,
-        error: nearest.target - nearest.temperature
+        current: nearest.current,
+        voltage: nearest.voltage,
+        label: `${nearest.runtimeHours.toFixed(2)}h | ${hh}:${mm}`
       }
     }
 
-    return { width, height, plotLeft, plotWidth, tempPoints, targetPoints, tickData, yTicks, hover }
-  }, [hoverRuntimeHour, runPoints, status.totaltime, viewEndHour, viewStartHour])
+    return {
+      width,
+      height,
+      plotLeft,
+      plotWidth,
+      tickData,
+      currentPoints: currentPlot.points,
+      voltagePoints: voltagePlot.points,
+      currentTicks: currentPlot.ticks,
+      voltageTicks: voltagePlot.ticks,
+      hover
+    }
+  }, [hoverRuntimeHour, powerPoints, runDurationHours, runPoints, viewEndHour, viewStartHour])
 
   const healthTrend = useMemo(() => {
     const width = 940
@@ -899,6 +1077,8 @@ export default function App() {
         dutyPath: '',
         withinPath: '',
         switchPath: '',
+        currentPath: '',
+        noCurrentPath: '',
         xLabels: [] as Array<{ x: number; label: string }>
       }
     }
@@ -924,6 +1104,8 @@ export default function App() {
     const duty = toPoints((r) => r.high_temp_duty_pct ?? 0)
     const within = toPoints((r) => r.within_5deg_pct ?? 0)
     const switches = toPoints((r) => r.switches_per_hour ?? 0)
+    const lineCurrent = toPoints((r) => r.line_current_avg_run ?? 0)
+    const noCurrent = toPoints((r) => r.no_current_when_heating_pct ?? 0)
 
     const labelIdx = [0, Math.floor((rows.length - 1) / 2), rows.length - 1]
     const xLabels = labelIdx.map((idx) => {
@@ -942,18 +1124,20 @@ export default function App() {
       dutyPath: normPath(duty),
       withinPath: normPath(within),
       switchPath: normPath(switches),
+      currentPath: normPath(lineCurrent),
+      noCurrentPath: normPath(noCurrent),
       xLabels
     }
   }, [healthRows])
 
   useEffect(() => {
-    const xMax = Math.max(0.1, status.totaltime ? status.totaltime / 3600 : runPoints[runPoints.length - 1]?.runtimeHours ?? 0.1)
+    const xMax = runDurationHours
     setViewEndHour((prev) => {
       if (prev <= 0 || prev > xMax) return xMax
       return prev
     })
     setViewStartHour((prev) => Math.max(0, Math.min(prev, xMax - 0.01)))
-  }, [runPoints, status.totaltime])
+  }, [runDurationHours])
 
   return (
     <main className="app">
@@ -1123,40 +1307,59 @@ export default function App() {
         <article className="card chart-card">
           <h3>Full Run Plot (Temp + Target)</h3>
           <div className="chart-tools">
+            <label htmlFor="chart-start-hour">Start (h)</label>
+            <input
+              id="chart-start-hour"
+              type="number"
+              min={0}
+              max={Math.max(0, runDurationHours - 0.01)}
+              step={0.25}
+              value={viewStartHour}
+              onChange={(e) => {
+                const requested = Math.max(0, Number(e.target.value) || 0)
+                const span = Math.max(0.01, viewEndHour - viewStartHour)
+                const nextStart = Math.min(requested, Math.max(0, runDurationHours - 0.01))
+                const nextEnd = Math.min(runDurationHours, Math.max(nextStart + 0.01, nextStart + span))
+                setViewStartHour(nextStart)
+                setViewEndHour(nextEnd)
+              }}
+            />
+            <label htmlFor="chart-end-hour">End (h)</label>
+            <input
+              id="chart-end-hour"
+              type="number"
+              min={Math.min(runDurationHours, viewStartHour + 0.01)}
+              max={runDurationHours}
+              step={0.25}
+              value={viewEndHour}
+              onChange={(e) => {
+                const requested = Number(e.target.value) || runDurationHours
+                const nextEnd = Math.max(viewStartHour + 0.01, Math.min(requested, runDurationHours))
+                setViewEndHour(nextEnd)
+              }}
+            />
             <button
               type="button"
               onClick={() => {
-                const span = Math.max(0.1, viewEndHour - viewStartHour)
-                const center = viewStartHour + span / 2
-                const nextSpan = Math.min(24, span * 1.6)
-                const max = Math.max(viewEndHour, runPoints[runPoints.length - 1]?.runtimeHours ?? 1)
-                setViewStartHour(Math.max(0, center - nextSpan / 2))
-                setViewEndHour(Math.min(max, center + nextSpan / 2))
+                const currentRuntime = runPoints[runPoints.length - 1]?.runtimeHours ?? runDurationHours
+                const span = Math.max(0.5, viewEndHour - viewStartHour)
+                const nextEnd = Math.min(runDurationHours, currentRuntime + 0.1)
+                const nextStart = Math.max(0, nextEnd - span)
+                setViewStartHour(nextStart)
+                setViewEndHour(nextEnd)
               }}
             >
-              Zoom Out
+              Follow Live
             </button>
             <button
               type="button"
               onClick={() => {
-                const span = Math.max(0.1, viewEndHour - viewStartHour)
-                const center = viewStartHour + span / 2
-                const nextSpan = Math.max(0.25, span / 1.6)
-                setViewStartHour(Math.max(0, center - nextSpan / 2))
-                setViewEndHour(center + nextSpan / 2)
-              }}
-            >
-              Zoom In
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const max = Math.max(0.1, status.totaltime ? status.totaltime / 3600 : runPoints[runPoints.length - 1]?.runtimeHours ?? 0.1)
+                const max = runDurationHours
                 setViewStartHour(0)
                 setViewEndHour(max)
               }}
             >
-              Reset
+              Full Run
             </button>
           </div>
           <svg
@@ -1199,7 +1402,7 @@ export default function App() {
           </svg>
           {runChart.hover ? (
             <p className="hover-readout">
-              {runChart.hover.label} | Temp {runChart.hover.temp.toFixed(1)} | Target {runChart.hover.target.toFixed(1)} | Error {runChart.hover.error.toFixed(1)}
+              {runChart.hover.label} | Temp {runChart.hover.temp != null ? runChart.hover.temp.toFixed(1) : '--'} | Target {runChart.hover.target.toFixed(1)} | Error {runChart.hover.error != null ? runChart.hover.error.toFixed(1) : '--'}
             </p>
           ) : (
             <p className="hover-readout">Move cursor over chart for exact time/temp readout.</p>
@@ -1207,6 +1410,58 @@ export default function App() {
           <div className="legend">
             <span className="legend-item"><i className="legend-swatch target" /> Target</span>
             <span className="legend-item"><i className="legend-swatch temp" /> Temperature</span>
+          </div>
+        </article>
+
+        <article className="card chart-card">
+          <h3>Line Current / Voltage (Full Run Window)</h3>
+          <p className="mini-chart-title">Current (A)</p>
+          <svg viewBox={`0 0 ${powerChart.width} ${powerChart.height}`} className="chart-svg" aria-label="Line current chart">
+            <polyline points={powerChart.currentPoints} className="current-line" fill="none" />
+            {powerChart.currentTicks.map((t) => (
+              <g key={`cy-${t.y}-${t.label}`}>
+                <line x1={powerChart.plotLeft} y1={t.y} x2={powerChart.plotLeft + powerChart.plotWidth} y2={t.y} className="grid-line-h" />
+                <text x={powerChart.plotLeft - 8} y={t.y + 3} textAnchor="end" className="axis-text-sub">{t.label}</text>
+              </g>
+            ))}
+            {powerChart.tickData.map((tick) => (
+              <line key={`cx-${tick.x}`} x1={tick.x} y1={0} x2={tick.x} y2={powerChart.height} className="grid-line" />
+            ))}
+            {powerChart.hover ? (
+              <line x1={powerChart.hover.x} y1={0} x2={powerChart.hover.x} y2={powerChart.height} className="cursor-line" />
+            ) : null}
+          </svg>
+
+          <p className="mini-chart-title">Voltage (V)</p>
+          <svg viewBox={`0 0 ${powerChart.width} ${powerChart.height + 36}`} className="chart-svg" aria-label="Line voltage chart">
+            <polyline points={powerChart.voltagePoints} className="voltage-line" fill="none" />
+            {powerChart.voltageTicks.map((t) => (
+              <g key={`vy-${t.y}-${t.label}`}>
+                <line x1={powerChart.plotLeft} y1={t.y} x2={powerChart.plotLeft + powerChart.plotWidth} y2={t.y} className="grid-line-h" />
+                <text x={powerChart.plotLeft - 8} y={t.y + 3} textAnchor="end" className="axis-text-sub">{t.label}</text>
+              </g>
+            ))}
+            {powerChart.tickData.map((tick) => (
+              <g key={`vx-${tick.x}`}>
+                <line x1={tick.x} y1={0} x2={tick.x} y2={powerChart.height} className="grid-line" />
+                <text x={tick.x} y={powerChart.height + 18} textAnchor="middle" className="axis-text">{tick.h}</text>
+                <text x={tick.x} y={powerChart.height + 33} textAnchor="middle" className="axis-text-sub">{tick.clock}</text>
+              </g>
+            ))}
+            {powerChart.hover ? (
+              <line x1={powerChart.hover.x} y1={0} x2={powerChart.hover.x} y2={powerChart.height} className="cursor-line" />
+            ) : null}
+          </svg>
+          {powerChart.hover ? (
+            <p className="hover-readout">
+              {powerChart.hover.label} | Current {powerChart.hover.current != null ? powerChart.hover.current.toFixed(2) : '--'}A | Voltage {powerChart.hover.voltage != null ? powerChart.hover.voltage.toFixed(1) : '--'}V
+            </p>
+          ) : (
+            <p className="hover-readout">Move cursor over chart for current/voltage readout.</p>
+          )}
+          <div className="legend">
+            <span className="legend-item"><i className="legend-swatch current" /> Current</span>
+            <span className="legend-item"><i className="legend-swatch voltage" /> Voltage</span>
           </div>
         </article>
 
@@ -1279,6 +1534,8 @@ export default function App() {
           <polyline points={healthTrend.dutyPath} className="trend-duty" fill="none" />
           <polyline points={healthTrend.withinPath} className="trend-within" fill="none" />
           <polyline points={healthTrend.switchPath} className="trend-switch" fill="none" />
+          <polyline points={healthTrend.currentPath} className="trend-current" fill="none" />
+          <polyline points={healthTrend.noCurrentPath} className="trend-nocurrent" fill="none" />
           {healthTrend.xLabels.map((x) => (
             <g key={`${x.x}-${x.label}`}>
               <line x1={x.x} y1={0} x2={x.x} y2={healthTrend.height - 20} className="grid-line" />
@@ -1291,6 +1548,8 @@ export default function App() {
           <span className="legend-item"><i className="legend-swatch duty" /> High-temp Duty</span>
           <span className="legend-item"><i className="legend-swatch within" /> Within ±5°</span>
           <span className="legend-item"><i className="legend-swatch sw" /> Switches/hr</span>
+          <span className="legend-item"><i className="legend-swatch hc" /> Avg Current</span>
+          <span className="legend-item"><i className="legend-swatch nc" /> No-current %</span>
         </div>
 
         <div className="profile-table-wrap">
@@ -1305,6 +1564,9 @@ export default function App() {
                 <th>High-temp Duty</th>
                 <th>Within ±5°</th>
                 <th>Switch/hr</th>
+                <th>Avg Current</th>
+                <th>Avg Power</th>
+                <th>No-current %</th>
               </tr>
             </thead>
             <tbody>
@@ -1324,6 +1586,9 @@ export default function App() {
                   <td>{row.high_temp_duty_pct?.toFixed(1) ?? '--'}%</td>
                   <td>{row.within_5deg_pct?.toFixed(1) ?? '--'}%</td>
                   <td>{row.switches_per_hour?.toFixed(1) ?? '--'}</td>
+                  <td>{row.line_current_avg_run?.toFixed(2) ?? '--'}A</td>
+                  <td>{row.line_power_avg_run?.toFixed(0) ?? '--'}W</td>
+                  <td>{row.no_current_when_heating_pct?.toFixed(1) ?? '--'}%</td>
                 </tr>
               ))}
             </tbody>

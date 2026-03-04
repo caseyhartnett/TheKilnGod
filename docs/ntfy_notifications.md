@@ -41,6 +41,7 @@ Start and stop a profile from UI/API. You should receive:
 - Profile segment (rate) change checkpoints
 - Temperature milestones (every 500 degrees by default)
 - Abnormal deviation alert (rapid temp drop while heating)
+- Catch-up shadow advisories (`would_extend` / `would_abort`) when shadow mode is enabled
 
 ## 5) Optional alert tuning
 

@@ -25,6 +25,8 @@ App-managed JSON/CSV logs are stored under `storage/logs/`:
 - `storage/logs/command-audit.log`
 - `storage/logs/run-health-history.jsonl`
 - `storage/logs/run-health-exclusions.json`
+- `storage/logs/power-telemetry.jsonl`
+- `storage/logs/catchup-shadow.jsonl` (shadow decisions: `normal`, `holdoff`, `would_extend`, `would_abort`)
 - `storage/logs/kiln-stats.csv` (default output for `thekilngod logger`)
 
 Per-run firing records (exact control-cycle timeline) are written to:
@@ -38,6 +40,13 @@ for runtime, measured temperature, target, error, relay on/off seconds, PID
 terms, and online quality indicators (`within_5deg`, switch rate, overshoot,
 sensor error rate). It also includes `start` and `end` rows so each file is a
 complete firing record.
+
+`power-telemetry.jsonl` rows include electrical measurements and control context, for example:
+
+- `line_voltage`, `line_current`, `line_power`, `line_energy_wh`
+- raw values (`line_current_raw`, `line_power_raw`, `line_energy_wh_raw`)
+- `power_sensor_stale`, `power_sensor_error_percent`
+- thermal context (`temperature`, `target`, `error`, `heat_on`)
 
 
 If you need to send kiln logs to someone for troubleshooting:

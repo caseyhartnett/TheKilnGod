@@ -22,6 +22,10 @@ export interface Telemetry {
   overshoot_max_run?: number
   sensor_error_rate_5m?: number
   time_catching_up_pct_run?: number
+  line_voltage_now?: number
+  line_current_now?: number
+  line_power_now?: number
+  line_energy_wh_now?: number
 }
 
 export interface StatusMessage {
@@ -61,5 +65,10 @@ export interface RunHealthEntry {
   within_5deg_pct?: number
   switches_per_hour?: number
   overshoot_max?: number
+  line_voltage_avg_run?: number
+  line_current_avg_run?: number
+  line_power_avg_run?: number
+  no_current_when_heating_pct?: number
+  power_sensor_stale_pct_run?: number
   excluded?: boolean
 }

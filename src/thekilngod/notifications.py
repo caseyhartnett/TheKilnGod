@@ -195,6 +195,58 @@ class NotificationManager:
                     "high",
                     ["kiln", "issue", "sensor"],
                 )
+            if issue == "heater_commanded_no_current":
+                current_amps = payload.get("current_amps")
+                threshold = float(payload.get("threshold_amps", 0.0))
+                window = float(payload.get("window_seconds", 0.0))
+                if current_amps is None:
+                    return (
+                        "Kiln Power Warning",
+                        f"Heater was commanded but current remained below threshold for {window:.0f}s.",
+                        "high",
+                        ["kiln", "issue", "power"],
+                    )
+                return (
+                    "Kiln Power Warning",
+                    (
+                        f"Heater commanded but current stayed low "
+                        f"({float(current_amps):.2f}A <= {threshold:.2f}A for {window:.0f}s)."
+                    ),
+                    "high",
+                    ["kiln", "issue", "power"],
+                )
+            if issue == "power_sensor_stale":
+                stale = float(payload.get("stale_seconds", 0.0))
+                return (
+                    "Kiln Power Sensor Stale",
+                    f"Power sensor has not updated for {stale:.0f}s.",
+                    "high",
+                    ["kiln", "issue", "sensor"],
+                )
+            if issue == "catchup_shadow_would_extend":
+                avg_error = float(payload.get("avg_error_confidence", 0.0))
+                rise = float(payload.get("rise_rate_trend_deg_per_hour", 0.0))
+                return (
+                    "Kiln Catch-Up Shadow",
+                    (
+                        "Shadow mode: sustained lag detected but trend still rising "
+                        f"(avg lag {avg_error:.1f}{temp_scale}, rise {rise:.1f}{temp_scale}/h)."
+                    ),
+                    "default",
+                    ["kiln", "issue", "shadow"],
+                )
+            if issue == "catchup_shadow_would_abort":
+                avg_error = float(payload.get("avg_error_confidence", 0.0))
+                lagging = float(payload.get("lagging_seconds", 0.0))
+                return (
+                    "Kiln Catch-Up Shadow",
+                    (
+                        "Shadow mode: run would be aborted for sustained inability to catch up "
+                        f"(avg lag {avg_error:.1f}{temp_scale}, lag duration {lagging/60.0:.0f}m)."
+                    ),
+                    "high",
+                    ["kiln", "issue", "shadow", "alert"],
+                )
             return (
                 "Kiln Issue",
                 f"Issue detected: {issue}",

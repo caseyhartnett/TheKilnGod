@@ -47,6 +47,14 @@ firing_record_directory = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "storage", "logs", "firings")
 )
 
+# Optional per-sample power telemetry log (JSON lines), useful for
+# diagnosing heating-element degradation against commanded heat duty.
+power_telemetry_log_enabled = True
+power_telemetry_log_file = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "power-telemetry.jsonl")
+)
+power_telemetry_log_interval_seconds = 2.0
+
 # Optional push notifications.
 # Supported provider: "ntfy"
 notifications_enabled = False
@@ -208,6 +216,31 @@ ha_mqtt_password = None
 ha_mqtt_topic_prefix = "kiln"
 ha_mqtt_client_id = "kiln-controller"
 
+#######################################
+### Optional power/current sensor (PZEM-004T)
+#######################################
+# Disabled by default; enable once UART wiring + level shifting are verified.
+power_sensor_enabled = False
+power_sensor_type = "pzem004t"
+power_sensor_port = "/dev/ttyUSB0"
+power_sensor_baudrate = 9600
+power_sensor_address = 1
+power_sensor_poll_interval = 2.0
+power_sensor_timeout = 0.4
+power_sensor_stale_seconds = 10.0
+# Scale measured current/power/energy before calculations/logging.
+# Example: if meter is on only one 120V leg and you want whole-kiln totals,
+# set this to 2.0.
+power_sensor_scale_factor = 2.0
+
+# Fault heuristics for "heater commanded but no measurable current".
+power_sensor_current_threshold_amps = 0.25
+power_sensor_mismatch_min_error = 15.0
+power_sensor_no_current_window_seconds = 30.0
+power_sensor_mismatch_cooldown_seconds = 300.0
+power_sensor_stale_alert_seconds = 30.0
+power_sensor_stale_cooldown_seconds = 300.0
+
 ########################################################################
 #
 # If your kiln is above the starting temperature of the schedule when you 
@@ -303,6 +336,34 @@ kiln_must_catch_up = True
 # outside the window. The bigger you make the window, the more
 # integral you will accumulate. This should be a positive integer.
 pid_control_window = 5 #degrees
+
+# Catch-up supervisor (shadow mode by default)
+# Evaluates long-horizon lag behavior and logs what actions would be taken
+# in enforce mode. Shadow mode never changes heater behavior or aborts runs.
+catchup_supervisor_enabled = True
+catchup_supervisor_mode = "shadow"  # shadow | enforce
+catchup_supervisor_min_runtime_seconds = 1800.0
+catchup_supervisor_min_target_temp = 900.0
+catchup_supervisor_fast_window_seconds = 180.0
+catchup_supervisor_trend_window_seconds = 900.0
+catchup_supervisor_confidence_window_seconds = 1800.0
+catchup_supervisor_error_threshold = 50.0
+catchup_supervisor_high_duty_threshold_pct = 90.0
+catchup_supervisor_min_rise_rate_deg_per_hour = 20.0
+catchup_supervisor_stall_rise_rate_deg_per_hour = 5.0
+catchup_supervisor_abort_persistence_seconds = 2400.0
+catchup_supervisor_cusum_alarm_deg_seconds = 60000.0
+catchup_supervisor_cusum_decay_deg_seconds_per_second = 5.0
+catchup_supervisor_transient_drop_window_seconds = 90.0
+catchup_supervisor_transient_drop_threshold = 20.0
+catchup_supervisor_transient_holdoff_seconds = 900.0
+
+# Persist shadow-mode decisions to disk for post-run threshold tuning.
+catchup_shadow_log_enabled = True
+catchup_shadow_log_file = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "catchup-shadow.jsonl")
+)
+catchup_shadow_log_interval_seconds = 30.0
 
 # thermocouple offset
 # If you put your thermocouple in ice water and it reads 36F, you can

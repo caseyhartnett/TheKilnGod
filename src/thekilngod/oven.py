@@ -24,6 +24,7 @@ import config
 import digitalio
 
 from .firing_record import FiringRecordWriter
+from .power_sensor import NullPowerSensor, Pzem004tPowerSensor
 from .telemetry_math import avg, bool_pct
 
 log = logging.getLogger(__name__)
@@ -54,6 +55,38 @@ class Duplogger:
 
 
 duplog = Duplogger().logref()
+
+
+def decide_catchup_shadow_state(
+    avg_error_confidence: float,
+    rise_rate_trend: float,
+    duty_cycle_confidence_pct: float,
+    lagging_seconds: float,
+    cusum_deg_seconds: float,
+    holdoff_active: bool,
+) -> str:
+    """Return shadow supervisor state from pre-computed trend metrics."""
+    if holdoff_active:
+        return "holdoff"
+    if (
+        avg_error_confidence > float(getattr(config, "catchup_supervisor_error_threshold", 50.0))
+        and duty_cycle_confidence_pct
+        >= float(getattr(config, "catchup_supervisor_high_duty_threshold_pct", 90.0))
+        and rise_rate_trend
+        <= float(getattr(config, "catchup_supervisor_stall_rise_rate_deg_per_hour", 5.0))
+        and lagging_seconds
+        >= float(getattr(config, "catchup_supervisor_abort_persistence_seconds", 2400.0))
+        and cusum_deg_seconds
+        >= float(getattr(config, "catchup_supervisor_cusum_alarm_deg_seconds", 60000.0))
+    ):
+        return "would_abort"
+    if (
+        avg_error_confidence > float(getattr(config, "catchup_supervisor_error_threshold", 50.0))
+        and rise_rate_trend
+        >= float(getattr(config, "catchup_supervisor_min_rise_rate_deg_per_hour", 20.0))
+    ):
+        return "would_extend"
+    return "normal"
 
 
 class Output:
@@ -90,6 +123,8 @@ class Board:
     def __init__(self) -> None:
         log.info("board: %s" % (self.name))
         self.temp_sensor.start()
+        if getattr(self, "power_sensor", None):
+            self.power_sensor.start()
 
 
 class RealBoard(Board):
@@ -102,6 +137,7 @@ class RealBoard(Board):
         self.name = None
         self.load_libs()
         self.temp_sensor = self.choose_tempsensor()
+        self.power_sensor = self.choose_power_sensor()
         Board.__init__(self)
 
     def load_libs(self) -> None:
@@ -115,6 +151,27 @@ class RealBoard(Board):
         if config.max31856:
             return Max31856()
 
+    def choose_power_sensor(self) -> Pzem004tPowerSensor | NullPowerSensor:
+        if not bool(getattr(config, "power_sensor_enabled", False)):
+            return NullPowerSensor(reason="disabled")
+
+        sensor_type = str(getattr(config, "power_sensor_type", "pzem004t")).strip().lower()
+        if sensor_type != "pzem004t":
+            log.warning("unknown power sensor type '%s'; disabling power sensor", sensor_type)
+            return NullPowerSensor(reason="unknown sensor type")
+        try:
+            return Pzem004tPowerSensor(
+                port=str(getattr(config, "power_sensor_port", "/dev/ttyUSB0")),
+                baudrate=int(getattr(config, "power_sensor_baudrate", 9600)),
+                address=int(getattr(config, "power_sensor_address", 1)),
+                poll_interval=float(getattr(config, "power_sensor_poll_interval", 2.0)),
+                timeout=float(getattr(config, "power_sensor_timeout", 0.4)),
+                stale_seconds=float(getattr(config, "power_sensor_stale_seconds", 10.0)),
+            )
+        except Exception as exc:
+            log.error("failed to initialize power sensor: %s", exc)
+            return NullPowerSensor(reason="init failed")
+
 
 class SimulatedBoard(Board):
     """Simulated board used during simulations.
@@ -124,6 +181,7 @@ class SimulatedBoard(Board):
     def __init__(self) -> None:
         self.name = "simulated"
         self.temp_sensor = TempSensorSimulated()
+        self.power_sensor = NullPowerSensor(reason="simulation")
         Board.__init__(self)
 
 
@@ -427,7 +485,10 @@ class Oven(threading.Thread):
         self._init_telemetry()
 
     def _init_telemetry(self) -> None:
-        self.telemetry_window_seconds = 300
+        confidence_window = float(
+            getattr(config, "catchup_supervisor_confidence_window_seconds", 1800.0)
+        )
+        self.telemetry_window_seconds = int(max(300.0, confidence_window))
         self.telemetry_samples = deque()
         self.telemetry_switches_5m = deque()
         self.telemetry_last_heat_state = None
@@ -448,6 +509,15 @@ class Oven(threading.Thread):
         self.telemetry_run_high_temp_samples = 0
         self.telemetry_run_max_temp = 0.0
         self.telemetry_run_max_target = 0.0
+        self.telemetry_run_line_power_sum = 0.0
+        self.telemetry_run_line_current_sum = 0.0
+        self.telemetry_run_line_voltage_sum = 0.0
+        self.telemetry_run_line_samples = 0
+        self.telemetry_run_line_energy_wh_last = 0.0
+        self.telemetry_run_no_current_heating_seconds = 0.0
+        self.telemetry_no_current_streak_seconds = 0.0
+        self.telemetry_run_power_sensor_stale_seconds = 0.0
+        self.telemetry_power_sensor_stale_streak_seconds = 0.0
         self.current_run_id = None
         self.current_run_started_ts = None
         self.current_run_peak_target = None
@@ -455,8 +525,29 @@ class Oven(threading.Thread):
         self.alert_sent_once = set()
         self.next_profile_checkpoint_index = None
         self.next_temp_milestone = None
+        self.telemetry_last_power_log_ts = 0.0
+        self.catchup_shadow_state = "normal"
+        self.catchup_shadow_last_change_runtime = 0.0
+        self.catchup_shadow_avg_error_confidence = 0.0
+        self.catchup_shadow_rise_rate_trend = 0.0
+        self.catchup_shadow_duty_cycle_confidence_pct = 0.0
+        self.catchup_shadow_lagging_seconds = 0.0
+        self.catchup_shadow_cusum_deg_seconds = 0.0
+        self.catchup_shadow_holdoff_until_runtime = 0.0
+        self.catchup_shadow_last_log_ts = 0.0
+        self.catchup_shadow_holdoff_active = False
         if not hasattr(self, "last_run_summary"):
             self.last_run_summary = None
+
+    def _get_power_snapshot(self) -> dict[str, Any]:
+        sensor = getattr(self.board, "power_sensor", None)
+        if not sensor:
+            return NullPowerSensor(reason="missing").snapshot()
+        try:
+            return sensor.snapshot()
+        except Exception as exc:
+            log.debug("power sensor snapshot failed: %s", exc)
+            return NullPowerSensor(reason="read error").snapshot()
 
     def _record_telemetry_sample(self, temp: float) -> None:
         # Record telemetry only once per control-cycle-ish runtime progression
@@ -473,6 +564,21 @@ class Oven(threading.Thread):
         within_5deg = abs_error <= 5
         heat_on = 1 if self.heat > 0 else 0
         overshoot = max(0.0, temp - self.target)
+        power = self._get_power_snapshot()
+        line_voltage = power.get("voltage")
+        raw_line_current = power.get("current")
+        raw_line_power = power.get("power")
+        raw_line_energy_wh = power.get("energy_wh")
+        scale = float(getattr(config, "power_sensor_scale_factor", 1.0))
+        line_current = (
+            float(raw_line_current) * scale if raw_line_current is not None else None
+        )
+        line_power = float(raw_line_power) * scale if raw_line_power is not None else None
+        line_energy_wh = (
+            float(raw_line_energy_wh) * scale if raw_line_energy_wh is not None else None
+        )
+        power_sensor_stale = bool(power.get("stale", True))
+        power_sensor_error_pct = float(power.get("error_rate_pct", 100.0))
 
         if self.telemetry_last_heat_state is not None and heat_on != self.telemetry_last_heat_state:
             self.telemetry_run_switches += 1
@@ -485,6 +591,11 @@ class Oven(threading.Thread):
             self.telemetry_run_catching_up_seconds += runtime_delta
         if prev_runtime > 0 and heat_on:
             self.telemetry_run_heat_on_seconds += runtime_delta
+        if prev_runtime > 0 and power_sensor_stale:
+            self.telemetry_run_power_sensor_stale_seconds += runtime_delta
+            self.telemetry_power_sensor_stale_streak_seconds += runtime_delta
+        else:
+            self.telemetry_power_sensor_stale_streak_seconds = 0.0
         self.telemetry_last_runtime = self.runtime
         self.telemetry_last_catching_up = self.catching_up
 
@@ -499,6 +610,13 @@ class Oven(threading.Thread):
             self.telemetry_run_max_temp = temp
         if self.target > self.telemetry_run_max_target:
             self.telemetry_run_max_target = self.target
+        if line_voltage is not None and line_current is not None and line_power is not None:
+            self.telemetry_run_line_voltage_sum += float(line_voltage)
+            self.telemetry_run_line_current_sum += float(line_current)
+            self.telemetry_run_line_power_sum += float(line_power)
+            self.telemetry_run_line_samples += 1
+        if line_energy_wh is not None:
+            self.telemetry_run_line_energy_wh_last = float(line_energy_wh)
 
         if self.current_run_peak_target and self.current_run_peak_target > 0:
             high_temp_threshold = self.current_run_peak_target * 0.9
@@ -509,27 +627,328 @@ class Oven(threading.Thread):
                 self.telemetry_run_high_temp_error_abs_sum += abs_error
                 self.telemetry_run_high_temp_samples += 1
 
-        self.telemetry_samples.append(
-            {
-                "time": now,
-                "runtime": self.runtime,
-                "error": error,
-                "abs_error": abs_error,
-                "heat_on": heat_on,
-                "within_5deg": within_5deg,
-                "temperature": temp,
-                "target": self.target,
-                "catching_up": self.catching_up,
-                "sensor_error_percent": self.board.temp_sensor.status.error_percent(),
-            }
+        mismatch_min_error = float(getattr(config, "power_sensor_mismatch_min_error", 15.0))
+        current_threshold = float(getattr(config, "power_sensor_current_threshold_amps", 0.25))
+        mismatch_window = float(getattr(config, "power_sensor_no_current_window_seconds", 30.0))
+        mismatch_cooldown = float(
+            getattr(config, "power_sensor_mismatch_cooldown_seconds", 300.0)
         )
+        stale_alert_seconds = float(getattr(config, "power_sensor_stale_alert_seconds", 30.0))
+        if prev_runtime > 0 and heat_on and (self.target - temp) >= mismatch_min_error:
+            if line_current is not None and float(line_current) <= current_threshold:
+                self.telemetry_run_no_current_heating_seconds += runtime_delta
+                self.telemetry_no_current_streak_seconds += runtime_delta
+            else:
+                self.telemetry_no_current_streak_seconds = 0.0
+        else:
+            self.telemetry_no_current_streak_seconds = 0.0
+
+        if self.telemetry_no_current_streak_seconds >= mismatch_window:
+            self._notify_with_cooldown(
+                key="heater_no_current",
+                event="issue_detected",
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "issue": "heater_commanded_no_current",
+                    "current_amps": float(line_current) if line_current is not None else None,
+                    "threshold_amps": current_threshold,
+                    "window_seconds": mismatch_window,
+                    "runtime_hours": self.runtime / 3600.0 if self.runtime else 0.0,
+                },
+                cooldown_seconds=mismatch_cooldown,
+            )
+
+        if (
+            power.get("available", False)
+            and self.telemetry_power_sensor_stale_streak_seconds >= stale_alert_seconds
+        ):
+            self._notify_with_cooldown(
+                key="power_sensor_stale",
+                event="issue_detected",
+                payload={
+                    "profile": self.profile.name if self.profile else None,
+                    "run_id": self.current_run_id,
+                    "issue": "power_sensor_stale",
+                    "stale_seconds": self.telemetry_power_sensor_stale_streak_seconds,
+                },
+                cooldown_seconds=float(
+                    getattr(config, "power_sensor_stale_cooldown_seconds", 300.0)
+                ),
+            )
+
+        sample = {
+            "time": now,
+            "runtime": self.runtime,
+            "error": error,
+            "abs_error": abs_error,
+            "heat_on": heat_on,
+            "within_5deg": within_5deg,
+            "temperature": temp,
+            "target": self.target,
+            "catching_up": self.catching_up,
+            "sensor_error_percent": self.board.temp_sensor.status.error_percent(),
+            "line_voltage": line_voltage,
+            "line_current": line_current,
+            "line_power": line_power,
+            "line_energy_wh": line_energy_wh,
+            "line_current_raw": raw_line_current,
+            "line_power_raw": raw_line_power,
+            "line_energy_wh_raw": raw_line_energy_wh,
+            "power_sensor_stale": power_sensor_stale,
+            "power_sensor_error_percent": power_sensor_error_pct,
+            "power_factor": power.get("power_factor"),
+        }
+        self.telemetry_samples.append(sample)
+        self._persist_power_telemetry_sample(now=now, sample=sample)
 
         cutoff = now - self.telemetry_window_seconds
         while self.telemetry_samples and self.telemetry_samples[0]["time"] < cutoff:
             self.telemetry_samples.popleft()
         while self.telemetry_switches_5m and self.telemetry_switches_5m[0] < cutoff:
             self.telemetry_switches_5m.popleft()
+        self._check_catchup_supervisor_shadow(
+            now=now,
+            error=error,
+            runtime_delta=runtime_delta,
+        )
         self._check_runtime_alerts(now, temp, error)
+
+    def _persist_power_telemetry_sample(self, now: float, sample: dict[str, Any]) -> None:
+        if not bool(getattr(config, "power_telemetry_log_enabled", False)):
+            return
+        interval = float(getattr(config, "power_telemetry_log_interval_seconds", 2.0))
+        if interval > 0 and self.telemetry_last_power_log_ts > 0:
+            if (now - self.telemetry_last_power_log_ts) < interval:
+                return
+        self.telemetry_last_power_log_ts = now
+
+        row = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "unix_time": now,
+            "run_id": self.current_run_id,
+            "profile": self.profile.name if self.profile else None,
+            "state": self.state,
+            "runtime_seconds": self.runtime,
+            "heat_command": self.heat,
+            "heat_on": sample.get("heat_on"),
+            "temperature": sample.get("temperature"),
+            "target": sample.get("target"),
+            "error": sample.get("error"),
+            "line_voltage": sample.get("line_voltage"),
+            "line_current": sample.get("line_current"),
+            "line_power": sample.get("line_power"),
+            "line_energy_wh": sample.get("line_energy_wh"),
+            "line_current_raw": sample.get("line_current_raw"),
+            "line_power_raw": sample.get("line_power_raw"),
+            "line_energy_wh_raw": sample.get("line_energy_wh_raw"),
+            "power_scale_factor": float(getattr(config, "power_sensor_scale_factor", 1.0)),
+            "power_factor": sample.get("power_factor"),
+            "power_sensor_stale": sample.get("power_sensor_stale"),
+            "power_sensor_error_percent": sample.get("power_sensor_error_percent"),
+            "sensor_error_percent": sample.get("sensor_error_percent"),
+        }
+        try:
+            os.makedirs(os.path.dirname(config.power_telemetry_log_file), exist_ok=True)
+            with open(config.power_telemetry_log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+        except Exception as exc:
+            log.error("failed writing power telemetry log: %s", exc)
+
+    @staticmethod
+    def _samples_since(
+        samples: list[dict[str, Any]], now: float, window_seconds: float
+    ) -> list[dict[str, Any]]:
+        cutoff = now - max(1.0, float(window_seconds))
+        return [sample for sample in samples if sample["time"] >= cutoff]
+
+    @staticmethod
+    def _rise_rate_deg_per_hour(samples: list[dict[str, Any]]) -> float:
+        if len(samples) < 2:
+            return 0.0
+        t0 = float(samples[0]["time"])
+        t1 = float(samples[-1]["time"])
+        if t1 <= t0:
+            return 0.0
+        temp0 = float(samples[0]["temperature"])
+        temp1 = float(samples[-1]["temperature"])
+        return ((temp1 - temp0) / (t1 - t0)) * 3600.0
+
+    def _persist_catchup_shadow_decision(
+        self, now: float, decision: str, reason: str, force: bool = False
+    ) -> None:
+        if not bool(getattr(config, "catchup_shadow_log_enabled", False)):
+            return
+        interval = float(getattr(config, "catchup_shadow_log_interval_seconds", 30.0))
+        if not force and interval > 0 and self.catchup_shadow_last_log_ts > 0:
+            if (now - self.catchup_shadow_last_log_ts) < interval:
+                return
+        self.catchup_shadow_last_log_ts = now
+
+        row = {
+            "ts": datetime.datetime.utcnow().isoformat() + "Z",
+            "unix_time": now,
+            "run_id": self.current_run_id,
+            "profile": self.profile.name if self.profile else None,
+            "mode": str(getattr(config, "catchup_supervisor_mode", "shadow")),
+            "decision": decision,
+            "reason": reason,
+            "runtime_seconds": self.runtime,
+            "temperature": self.temperature,
+            "target": self.target,
+            "error": self.target - self.temperature,
+            "avg_error_confidence": self.catchup_shadow_avg_error_confidence,
+            "rise_rate_trend_deg_per_hour": self.catchup_shadow_rise_rate_trend,
+            "duty_cycle_confidence_pct": self.catchup_shadow_duty_cycle_confidence_pct,
+            "lagging_seconds": self.catchup_shadow_lagging_seconds,
+            "cusum_deg_seconds": self.catchup_shadow_cusum_deg_seconds,
+            "holdoff_active": self.catchup_shadow_holdoff_active,
+            "holdoff_until_runtime": self.catchup_shadow_holdoff_until_runtime,
+        }
+        try:
+            os.makedirs(os.path.dirname(config.catchup_shadow_log_file), exist_ok=True)
+            with open(config.catchup_shadow_log_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(row) + "\n")
+        except Exception as exc:
+            log.error("failed writing catchup shadow log: %s", exc)
+
+    def _check_catchup_supervisor_shadow(
+        self,
+        now: float,
+        error: float,
+        runtime_delta: float,
+    ) -> None:
+        if not bool(getattr(config, "catchup_supervisor_enabled", True)):
+            return
+        if self.state != "RUNNING" or not self.profile:
+            return
+
+        min_runtime = float(getattr(config, "catchup_supervisor_min_runtime_seconds", 1800.0))
+        min_target = float(getattr(config, "catchup_supervisor_min_target_temp", 900.0))
+        if self.runtime < min_runtime or self.target < min_target:
+            self.catchup_shadow_state = "normal"
+            self.catchup_shadow_holdoff_active = False
+            return
+
+        fast_window = float(getattr(config, "catchup_supervisor_fast_window_seconds", 180.0))
+        trend_window = float(getattr(config, "catchup_supervisor_trend_window_seconds", 900.0))
+        confidence_window = float(
+            getattr(config, "catchup_supervisor_confidence_window_seconds", 1800.0)
+        )
+        recent = list(self.telemetry_samples)
+        fast_samples = self._samples_since(recent, now, fast_window)
+        trend_samples = self._samples_since(recent, now, trend_window)
+        confidence_samples = self._samples_since(recent, now, confidence_window)
+
+        if len(confidence_samples) < 2:
+            return
+
+        avg_error_confidence = avg([float(sample["error"]) for sample in confidence_samples])
+        duty_cycle_confidence_pct = (
+            avg([float(sample["heat_on"]) for sample in confidence_samples]) * 100.0
+        )
+        rise_rate_fast = self._rise_rate_deg_per_hour(fast_samples)
+        rise_rate_trend = self._rise_rate_deg_per_hour(trend_samples)
+
+        transient_drop_window = float(
+            getattr(config, "catchup_supervisor_transient_drop_window_seconds", 90.0)
+        )
+        transient_drop_threshold = float(
+            getattr(config, "catchup_supervisor_transient_drop_threshold", 20.0)
+        )
+        transient_holdoff = float(getattr(config, "catchup_supervisor_transient_holdoff_seconds", 900.0))
+        transient_samples = self._samples_since(recent, now, transient_drop_window)
+        if len(transient_samples) >= 2:
+            drop = float(transient_samples[-1]["temperature"]) - float(transient_samples[0]["temperature"])
+            if drop <= -abs(transient_drop_threshold) and error > float(config.pid_control_window):
+                self.catchup_shadow_holdoff_until_runtime = max(
+                    self.catchup_shadow_holdoff_until_runtime,
+                    self.runtime + transient_holdoff,
+                )
+
+        self.catchup_shadow_holdoff_active = self.runtime < self.catchup_shadow_holdoff_until_runtime
+
+        lag_threshold = float(getattr(config, "catchup_supervisor_error_threshold", 50.0))
+        if avg_error_confidence >= lag_threshold:
+            self.catchup_shadow_lagging_seconds += max(0.0, runtime_delta)
+        else:
+            self.catchup_shadow_lagging_seconds = max(
+                0.0, self.catchup_shadow_lagging_seconds - max(0.0, runtime_delta) * 2.0
+            )
+
+        cusum_decay_rate = float(
+            getattr(config, "catchup_supervisor_cusum_decay_deg_seconds_per_second", 5.0)
+        )
+        residual = max(0.0, avg_error_confidence - lag_threshold)
+        self.catchup_shadow_cusum_deg_seconds += residual * max(0.0, runtime_delta)
+        if residual <= 0:
+            self.catchup_shadow_cusum_deg_seconds = max(
+                0.0,
+                self.catchup_shadow_cusum_deg_seconds - (cusum_decay_rate * max(0.0, runtime_delta)),
+            )
+
+        decision = decide_catchup_shadow_state(
+            avg_error_confidence=avg_error_confidence,
+            rise_rate_trend=rise_rate_trend,
+            duty_cycle_confidence_pct=duty_cycle_confidence_pct,
+            lagging_seconds=self.catchup_shadow_lagging_seconds,
+            cusum_deg_seconds=self.catchup_shadow_cusum_deg_seconds,
+            holdoff_active=self.catchup_shadow_holdoff_active,
+        )
+        previous_state = self.catchup_shadow_state
+        self.catchup_shadow_state = decision
+        self.catchup_shadow_avg_error_confidence = avg_error_confidence
+        self.catchup_shadow_rise_rate_trend = rise_rate_trend
+        self.catchup_shadow_duty_cycle_confidence_pct = duty_cycle_confidence_pct
+
+        if previous_state != decision:
+            self.catchup_shadow_last_change_runtime = self.runtime
+            log.warning(
+                "catchup supervisor (%s): %s -> %s (avg_error=%.1f, rise_trend=%.1f/h, rise_fast=%.1f/h, duty=%.1f%%, lagging_s=%.0f, cusum=%.0f, holdoff=%s)",
+                str(getattr(config, "catchup_supervisor_mode", "shadow")),
+                previous_state,
+                decision,
+                avg_error_confidence,
+                rise_rate_trend,
+                rise_rate_fast,
+                duty_cycle_confidence_pct,
+                self.catchup_shadow_lagging_seconds,
+                self.catchup_shadow_cusum_deg_seconds,
+                self.catchup_shadow_holdoff_active,
+            )
+            self._persist_catchup_shadow_decision(
+                now=now, decision=decision, reason="state_change", force=True
+            )
+            payload = {
+                "profile": self.profile.name if self.profile else None,
+                "run_id": self.current_run_id,
+                "mode": str(getattr(config, "catchup_supervisor_mode", "shadow")),
+                "decision": decision,
+                "avg_error_confidence": avg_error_confidence,
+                "rise_rate_trend_deg_per_hour": rise_rate_trend,
+                "duty_cycle_confidence_pct": duty_cycle_confidence_pct,
+                "lagging_seconds": self.catchup_shadow_lagging_seconds,
+                "cusum_deg_seconds": self.catchup_shadow_cusum_deg_seconds,
+                "runtime_hours": self.runtime / 3600.0 if self.runtime else 0.0,
+            }
+            if decision == "would_abort":
+                self._notify_with_cooldown(
+                    key="catchup_shadow_would_abort",
+                    event="issue_detected",
+                    payload={**payload, "issue": "catchup_shadow_would_abort"},
+                    cooldown_seconds=600.0,
+                )
+            elif decision == "would_extend":
+                self._notify_with_cooldown(
+                    key="catchup_shadow_would_extend",
+                    event="issue_detected",
+                    payload={**payload, "issue": "catchup_shadow_would_extend"},
+                    cooldown_seconds=1800.0,
+                )
+        else:
+            self._persist_catchup_shadow_decision(
+                now=now, decision=decision, reason="interval", force=False
+            )
 
     def _notify_with_cooldown(
         self,
@@ -680,6 +1099,15 @@ class Oven(threading.Thread):
         heat = [sample["heat_on"] for sample in recent]
         within = [sample["within_5deg"] for sample in recent]
         sensor_errors = [sample["sensor_error_percent"] for sample in recent]
+        line_voltages = [sample["line_voltage"] for sample in recent if sample["line_voltage"] is not None]
+        line_currents = [sample["line_current"] for sample in recent if sample["line_current"] is not None]
+        line_powers = [sample["line_power"] for sample in recent if sample["line_power"] is not None]
+        power_sensor_stale = [sample["power_sensor_stale"] for sample in recent]
+        power_sensor_errors = [sample["power_sensor_error_percent"] for sample in recent]
+        latest_line_energy = next(
+            (sample["line_energy_wh"] for sample in reversed(recent) if sample["line_energy_wh"] is not None),
+            self.telemetry_run_line_energy_wh_last,
+        )
 
         one_minute_cutoff = time.time() - 60
         recent_1m_errors = [
@@ -700,6 +1128,12 @@ class Oven(threading.Thread):
             if self.runtime > 0
             else 0.0
         )
+        no_current_pct_run = (
+            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds) * 100
+            if self.telemetry_run_heat_on_seconds > 0
+            else 0.0
+        )
+        power = self._get_power_snapshot()
 
         return {
             "window_seconds": self.telemetry_window_seconds,
@@ -715,6 +1149,32 @@ class Oven(threading.Thread):
             "overshoot_max_run": self.telemetry_run_overshoot_max,
             "time_catching_up_pct_run": catching_up_pct_run,
             "sensor_error_rate_5m": avg(sensor_errors),
+            "power_sensor_available": bool(power.get("available", False)),
+            "power_sensor_ok": bool(power.get("ok", False)),
+            "power_sensor_stale_5m": bool_pct(power_sensor_stale),
+            "power_sensor_error_rate_5m": avg(power_sensor_errors),
+            "line_voltage_now": power.get("voltage"),
+            "line_current_now": power.get("current"),
+            "line_power_now": power.get("power"),
+            "line_energy_wh_now": power.get("energy_wh"),
+            "line_voltage_avg_5m": avg(line_voltages),
+            "line_current_avg_5m": avg(line_currents),
+            "line_power_avg_5m": avg(line_powers),
+            "line_energy_wh_last_5m": latest_line_energy,
+            "no_current_when_heating_pct_run": no_current_pct_run,
+            "catchup_supervisor_enabled": bool(
+                getattr(config, "catchup_supervisor_enabled", True)
+            ),
+            "catchup_supervisor_mode": str(
+                getattr(config, "catchup_supervisor_mode", "shadow")
+            ),
+            "catchup_shadow_state": self.catchup_shadow_state,
+            "catchup_shadow_avg_error_confidence": self.catchup_shadow_avg_error_confidence,
+            "catchup_shadow_rise_rate_trend_deg_per_hour": self.catchup_shadow_rise_rate_trend,
+            "catchup_shadow_duty_cycle_confidence_pct": self.catchup_shadow_duty_cycle_confidence_pct,
+            "catchup_shadow_lagging_seconds": self.catchup_shadow_lagging_seconds,
+            "catchup_shadow_cusum_deg_seconds": self.catchup_shadow_cusum_deg_seconds,
+            "catchup_shadow_holdoff_active": self.catchup_shadow_holdoff_active,
         }
 
     @staticmethod
@@ -906,6 +1366,16 @@ class Oven(threading.Thread):
             else self.telemetry_run_max_target
         )
         max_temp_gap_to_peak = peak_target - self.telemetry_run_max_temp if peak_target else 0.0
+        no_current_pct = (
+            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds) * 100
+            if self.telemetry_run_heat_on_seconds > 0
+            else 0.0
+        )
+        power_sensor_stale_pct = (
+            (self.telemetry_run_power_sensor_stale_seconds / self.runtime) * 100
+            if self.runtime > 0
+            else 0.0
+        )
 
         return {
             "run_id": self.current_run_id,
@@ -940,6 +1410,25 @@ class Oven(threading.Thread):
             "sensor_error_rate_5m": avg(
                 [sample["sensor_error_percent"] for sample in self.telemetry_samples]
             ),
+            "line_voltage_avg_run": (
+                self.telemetry_run_line_voltage_sum / float(self.telemetry_run_line_samples)
+                if self.telemetry_run_line_samples
+                else 0.0
+            ),
+            "line_current_avg_run": (
+                self.telemetry_run_line_current_sum / float(self.telemetry_run_line_samples)
+                if self.telemetry_run_line_samples
+                else 0.0
+            ),
+            "line_power_avg_run": (
+                self.telemetry_run_line_power_sum / float(self.telemetry_run_line_samples)
+                if self.telemetry_run_line_samples
+                else 0.0
+            ),
+            "line_energy_wh_last": self.telemetry_run_line_energy_wh_last,
+            "no_current_when_heating_seconds": self.telemetry_run_no_current_heating_seconds,
+            "no_current_when_heating_pct": no_current_pct,
+            "power_sensor_stale_pct_run": power_sensor_stale_pct,
             "completed": reason == "schedule_complete",
         }
 
@@ -1407,9 +1896,16 @@ class RealOven(Oven):
         if heat_off:
             self.output.cool(heat_off)
         time_left = self.totaltime - self.runtime
+        power = self._get_power_snapshot()
+        line_current = power.get("current")
+        line_power = power.get("power")
+        line_voltage = power.get("voltage")
+        current_txt = "%.3f" % float(line_current) if line_current is not None else "--"
+        power_txt = "%.1f" % float(line_power) if line_power is not None else "--"
+        voltage_txt = "%.1f" % float(line_voltage) if line_voltage is not None else "--"
         try:
             log.info(
-                "temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d"
+                "temp=%.2f, target=%.2f, error=%.2f, pid=%.2f, p=%.2f, i=%.2f, d=%.2f, heat_on=%.2f, heat_off=%.2f, run_time=%d, total_time=%d, time_left=%d, line_v=%s, line_i=%s, line_p=%s"
                 % (
                     self.pid.pidstats["ispoint"],
                     self.pid.pidstats["setpoint"],
@@ -1423,6 +1919,9 @@ class RealOven(Oven):
                     self.runtime,
                     self.totaltime,
                     time_left,
+                    voltage_txt,
+                    current_txt,
+                    power_txt,
                 )
             )
         except KeyError:

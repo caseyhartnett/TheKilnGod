@@ -41,10 +41,38 @@ Example response shape:
     "duty_cycle_5m": 42.0,
     "overshoot_max_run": 9.5,
     "time_catching_up_pct_run": 3.4,
-    "sensor_error_rate_5m": 0.0
+    "sensor_error_rate_5m": 0.0,
+    "power_sensor_available": true,
+    "power_sensor_ok": true,
+    "power_sensor_stale_5m": 0.0,
+    "power_sensor_error_rate_5m": 0.0,
+    "line_voltage_now": 240.1,
+    "line_current_now": 18.2,
+    "line_power_now": 4370.2,
+    "line_energy_wh_now": 12845.0,
+    "line_voltage_avg_5m": 239.8,
+    "line_current_avg_5m": 17.9,
+    "line_power_avg_5m": 4290.4,
+    "line_energy_wh_last_5m": 12845.0,
+    "no_current_when_heating_pct_run": 0.0,
+    "catchup_supervisor_enabled": true,
+    "catchup_supervisor_mode": "shadow",
+    "catchup_shadow_state": "normal",
+    "catchup_shadow_avg_error_confidence": 8.2,
+    "catchup_shadow_rise_rate_trend_deg_per_hour": 112.5,
+    "catchup_shadow_duty_cycle_confidence_pct": 64.0,
+    "catchup_shadow_lagging_seconds": 0.0,
+    "catchup_shadow_cusum_deg_seconds": 0.0,
+    "catchup_shadow_holdoff_active": false
   }
 }
 ```
+
+Catch-up shadow telemetry fields are additive and informational when
+`catchup_supervisor_mode` is `shadow`. They do not imply automatic run abort.
+
+Power/current telemetry fields are additive and are only populated when the
+optional power sensor is enabled and healthy.
 
 ## `POST /api`
 
@@ -216,6 +244,15 @@ Also sends a backlog envelope for new observers:
 ```
 
 Auth role: monitor.
+
+## Runtime Issue Events
+
+`issue_detected` notifications may include:
+
+- `heater_commanded_no_current`: heater was on while measured current remained below threshold
+- `power_sensor_stale`: power sensor has not provided fresh data within alert window
+- `catchup_shadow_would_extend`: shadow evaluator indicates lagging-but-rising condition
+- `catchup_shadow_would_abort`: shadow evaluator indicates sustained inability to catch up
 
 ## `/storage`
 

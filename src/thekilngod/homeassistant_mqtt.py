@@ -105,6 +105,7 @@ class HomeAssistantMQTT(threading.Thread):
                     runtime = state.get("runtime", 0)
                     totaltime = state.get("totaltime", 0)
                     profile_name = state.get("profile", "None")
+                    telemetry = state.get("telemetry", {}) or {}
                     if profile_name is None:
                         profile_name = "None"
 
@@ -127,6 +128,28 @@ class HomeAssistantMQTT(threading.Thread):
                     self.publish("sensor/profile_name/state", profile_name)
                     self.publish("sensor/runtime/state", str(int(runtime)))
                     self.publish("sensor/heat_rate/state", str(round(heat_rate, 2)))
+                    if telemetry.get("line_voltage_now") is not None:
+                        self.publish(
+                            "sensor/line_voltage/state", str(round(telemetry["line_voltage_now"], 2))
+                        )
+                    if telemetry.get("line_current_now") is not None:
+                        self.publish(
+                            "sensor/line_current/state", str(round(telemetry["line_current_now"], 3))
+                        )
+                    if telemetry.get("line_power_now") is not None:
+                        self.publish(
+                            "sensor/line_power/state", str(round(telemetry["line_power_now"], 1))
+                        )
+                    if telemetry.get("line_energy_wh_now") is not None:
+                        self.publish(
+                            "sensor/line_energy_wh/state",
+                            str(round(telemetry["line_energy_wh_now"], 1)),
+                        )
+                    if telemetry.get("power_sensor_ok") is not None:
+                        self.publish(
+                            "binary_sensor/power_sensor_ok/state",
+                            "ON" if telemetry["power_sensor_ok"] else "OFF",
+                        )
                 else:
                     log.warning("MQTT not connected, skipping publish")
 
