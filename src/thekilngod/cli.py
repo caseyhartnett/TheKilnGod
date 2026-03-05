@@ -20,12 +20,18 @@ def _run_script(relative_path: str, args: list[str]) -> int:
     """
     script_path = REPO_ROOT / relative_path
     old_argv = sys.argv[:]
+    old_path = sys.path[:]
     try:
+        # Ensure repository-local scripts can import `config.py` and package modules
+        # regardless of where the entrypoint binary is invoked from.
+        sys.path.insert(0, str(REPO_ROOT))
+        sys.path.insert(0, str(REPO_ROOT / "src"))
         sys.argv = [str(script_path), *args]
         runpy.run_path(str(script_path), run_name="__main__")
         return 0
     finally:
         sys.argv = old_argv
+        sys.path = old_path
 
 
 def _run_callable(fn: Callable[[], int | None], argv0: str, args: list[str]) -> int:
