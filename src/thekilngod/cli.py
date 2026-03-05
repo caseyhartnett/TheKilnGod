@@ -76,6 +76,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("logger", help="Run websocket logger")
 
+    sub.add_parser("firing-analyzer", help="Estimate cone from profile plan and/or run logs")
+
     sub.add_parser("gpio-readall", help="Show GPIO state table")
 
     sub.add_parser("watcher", help="Run external watcher utility")
@@ -117,6 +119,10 @@ def main() -> int:
         return _run_script("scripts/kiln_tuner.py", remainder)
     if ns.command == "logger":
         return _run_script("scripts/kiln_logger.py", remainder)
+    if ns.command == "firing-analyzer":
+        from .firing_analyzer import main as firing_analyzer_main
+
+        return _run_callable(firing_analyzer_main, "firing-analyzer", remainder)
     if ns.command == "gpio-readall":
         return _run_script("scripts/gpio_readall.py", remainder)
     if ns.command == "watcher":

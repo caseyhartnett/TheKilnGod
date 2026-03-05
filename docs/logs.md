@@ -27,6 +27,18 @@ App-managed JSON/CSV logs are stored under `storage/logs/`:
 - `storage/logs/run-health-exclusions.json`
 - `storage/logs/kiln-stats.csv` (default output for `thekilngod logger`)
 
+Per-run firing records (exact control-cycle timeline) are written to:
+
+- `storage/logs/firings/*.csv`
+- `storage/logs/firings/*.meta.json`
+- `storage/logs/firings/*.summary.json`
+
+The per-run CSV includes one `sample` row for each control cycle with fields
+for runtime, measured temperature, target, error, relay on/off seconds, PID
+terms, and online quality indicators (`within_5deg`, switch rate, overshoot,
+sensor error rate). It also includes `start` and `end` rows so each file is a
+complete firing record.
+
 
 If you need to send kiln logs to someone for troubleshooting:
 

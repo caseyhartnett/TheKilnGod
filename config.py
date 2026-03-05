@@ -38,6 +38,15 @@ run_health_exclusions_file = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "storage", "logs", "run-health-exclusions.json")
 )
 
+# Exact per-firing cycle log (CSV + metadata JSON sidecar).
+# Each run gets its own file with timestamp, runtime, measured temp, target,
+# relay on/off timing, PID terms, and end-of-run quality summary.
+firing_record_enabled = True
+firing_record_flush_each_row = True
+firing_record_directory = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "storage", "logs", "firings")
+)
+
 # Optional push notifications.
 # Supported provider: "ntfy"
 notifications_enabled = False
@@ -163,7 +172,7 @@ thermocouple_type = None
 if max31856:
     try:
         import adafruit_max31856
-        thermocouple_type = adafruit_max31856.ThermocoupleType.S
+        thermocouple_type = adafruit_max31856.ThermocoupleType.K
     except ImportError:
         # Module not installed - this is OK if you're not using the thermocouple hardware
         # The error will occur when actually trying to use it, not at import time

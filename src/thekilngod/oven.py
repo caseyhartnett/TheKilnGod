@@ -23,6 +23,7 @@ import adafruit_bitbangio as bitbangio
 import config
 import digitalio
 
+from .firing_record import FiringRecordWriter
 from .telemetry_math import avg, bool_pct
 
 log = logging.getLogger(__name__)
@@ -402,6 +403,12 @@ class Oven(threading.Thread):
         self.time_step = config.sensor_time_wait
         self.buzzer = buzzer
         self.notifier = None
+        self.firing_record = FiringRecordWriter(
+            enabled=bool(getattr(config, "firing_record_enabled", True)),
+            output_dir=getattr(config, "firing_record_directory", None),
+            flush_each_row=bool(getattr(config, "firing_record_flush_each_row", True)),
+        )
+        self.current_firing_log_file = None
         self.reset()
 
     def reset(self) -> None:
@@ -752,6 +759,8 @@ class Oven(threading.Thread):
                     temp = self.board.temp_sensor.temperature()  # Defined in a subclass
                     runtime += self.get_start_from_temperature(profile, temp)
 
+        self.firing_record.close()
+        self.current_firing_log_file = None
         self.reset()
         self.startat = startat * 60
         self.runtime = runtime
@@ -774,6 +783,97 @@ class Oven(threading.Thread):
                 "startat_minutes": startat,
                 "run_id": self.current_run_id,
             },
+        )
+        self._start_firing_record(profile=profile, startat_seconds=self.startat)
+
+    def _start_firing_record(self, profile: Profile, startat_seconds: float) -> None:
+        metadata = {
+            "profile_data": profile.data,
+            "temp_scale": getattr(config, "temp_scale", "f"),
+            "sensor_time_wait": self.time_step,
+            "thermocouple_offset": getattr(config, "thermocouple_offset", 0),
+            "pid_kp": getattr(config, "pid_kp", None),
+            "pid_ki": getattr(config, "pid_ki", None),
+            "pid_kd": getattr(config, "pid_kd", None),
+            "pid_control_window": getattr(config, "pid_control_window", None),
+            "kiln_must_catch_up": getattr(config, "kiln_must_catch_up", None),
+            "throttle_below_temp": getattr(config, "throttle_below_temp", None),
+            "throttle_percent": getattr(config, "throttle_percent", None),
+            "min_on_time": getattr(config, "min_on_time", None),
+            "simulate": getattr(config, "simulate", None),
+        }
+        self.current_firing_log_file = self.firing_record.start_run(
+            run_id=self.current_run_id or "unknown",
+            profile_name=profile.name,
+            startat_seconds=startat_seconds,
+            total_seconds=self.totaltime,
+            metadata=metadata,
+        )
+
+    def _sensor_error_percent(self) -> float:
+        try:
+            return float(self.board.temp_sensor.status.error_percent())
+        except Exception:
+            return 0.0
+
+    def _record_firing_cycle(
+        self,
+        *,
+        measured_temp: float,
+        heat_on: float,
+        heat_off: float,
+        cycle_epoch: float | None = None,
+        notes: str = "",
+    ) -> None:
+        if not self.current_run_id:
+            return
+
+        timestamp = cycle_epoch if cycle_epoch is not None else time.time()
+        self.set_heat_rate(self.runtime, measured_temp)
+        error = self.target - measured_temp
+        runtime_hours = self.runtime / 3600 if self.runtime > 0 else 0.0
+        switches_per_hour_run = (
+            self.telemetry_run_switches / runtime_hours if runtime_hours > 0 else 0.0
+        )
+        pidstats = self.pid.pidstats if isinstance(self.pid.pidstats, dict) else {}
+
+        self.firing_record.write_sample(
+            {
+                "row_type": "sample",
+                "ts_utc": datetime.datetime.utcfromtimestamp(timestamp).isoformat() + "Z",
+                "epoch_s": timestamp,
+                "run_id": self.current_run_id,
+                "profile": self.profile.name if self.profile else None,
+                "state": self.state,
+                "runtime_s": self.runtime,
+                "total_s": self.totaltime,
+                "time_left_s": max(0.0, self.totaltime - self.runtime),
+                "startat_s": self.startat if hasattr(self, "startat") else 0.0,
+                "temperature": measured_temp,
+                "target": self.target,
+                "error": error,
+                "abs_error": abs(error),
+                "within_5deg": abs(error) <= 5,
+                "catching_up": self.catching_up,
+                "relay_on": heat_on > 0,
+                "heat_on_s": heat_on,
+                "heat_off_s": heat_off,
+                "pid_out": pidstats.get("out"),
+                "pid_raw": pidstats.get("pid"),
+                "pid_p": pidstats.get("p"),
+                "pid_i": pidstats.get("i"),
+                "pid_d": pidstats.get("d"),
+                "pid_kp": pidstats.get("kp"),
+                "pid_ki": pidstats.get("ki"),
+                "pid_kd": pidstats.get("kd"),
+                "heat_rate_deg_per_hour": self.heat_rate,
+                "cost": self.cost,
+                "sensor_error_pct": self._sensor_error_percent(),
+                "switch_count_run": self.telemetry_run_switches,
+                "switches_per_hour_run": switches_per_hour_run,
+                "overshoot_max_run": self.telemetry_run_overshoot_max,
+                "notes": notes,
+            }
         )
 
     def get_run_health_summary(self, reason: str) -> dict[str, Any]:
@@ -856,12 +956,17 @@ class Oven(threading.Thread):
     def finalize_run(self, reason: str = "abort") -> None:
         if self.state in ("RUNNING", "PAUSED") and self.profile:
             summary = self.get_run_health_summary(reason)
+            if self.current_firing_log_file:
+                summary["firing_record_file"] = self.current_firing_log_file
             self.last_run_summary = summary
             self.save_run_health_summary(summary)
             log.info(
                 "run health summary saved for profile=%s reason=%s", summary.get("profile"), reason
             )
             self._notify_event("run_finished", summary)
+            self.firing_record.end_run(reason=reason, summary=summary)
+            self.firing_record.close()
+            self.current_firing_log_file = None
 
     def abort_run(self, reason: str = "abort") -> None:
         if self.buzzer:
@@ -1002,6 +1107,7 @@ class Oven(threading.Thread):
             "catching_up": self.catching_up,
             "telemetry": self.get_telemetry(),
             "last_run_summary": self.last_run_summary,
+            "firing_record_file": self.current_firing_log_file,
         }
         return state
 
@@ -1172,6 +1278,7 @@ class SimulatedOven(Oven):
 
     def heat_then_cool(self) -> None:
         now_simulator = self.start_time + datetime.timedelta(milliseconds=self.runtime * 1000)
+        cycle_epoch = time.time()
         pid = self.pid.compute(
             self.target,
             self.board.temp_sensor.temperature() + config.thermocouple_offset,
@@ -1217,6 +1324,20 @@ class SimulatedOven(Oven):
         except KeyError:
             pass
 
+        measured_temp = float(
+            self.pid.pidstats.get(
+                "ispoint",
+                self.board.temp_sensor.temperature() + config.thermocouple_offset,
+            )
+        )
+        self._record_firing_cycle(
+            measured_temp=measured_temp,
+            heat_on=heat_on,
+            heat_off=heat_off,
+            cycle_epoch=cycle_epoch,
+            notes="simulation",
+        )
+
         # we don't actually spend time heating & cooling during
         # a simulation, so sleep.
         time.sleep(self.time_step / self.speedup_factor)
@@ -1239,6 +1360,7 @@ class RealOven(Oven):
         self.output.cool(0)
 
     def heat_then_cool(self) -> None:
+        cycle_epoch = time.time()
         pid = self.pid.compute(
             self.target,
             self.board.temp_sensor.temperature() + config.thermocouple_offset,
@@ -1263,6 +1385,7 @@ class RealOven(Oven):
             and error > config.pid_control_window
             and abs(pid - (config.throttle_percent / 100.0)) < 0.01
         )
+        cycle_notes = []
 
         if config.min_on_time > 0 and 0 < heat_on < config.min_on_time and not is_throttled:
             log.debug(
@@ -1270,6 +1393,9 @@ class RealOven(Oven):
             )
             heat_off = self.time_step  # entire cycle is off
             heat_on = 0.0
+            cycle_notes.append("min_on_time_clamped")
+        if is_throttled:
+            cycle_notes.append("throttled")
 
         # self.heat is for the front end to display if the heat is on
         self.heat = 0.0
@@ -1301,6 +1427,14 @@ class RealOven(Oven):
             )
         except KeyError:
             pass
+
+        self._record_firing_cycle(
+            measured_temp=current_temp,
+            heat_on=heat_on,
+            heat_off=heat_off,
+            cycle_epoch=cycle_epoch,
+            notes=",".join(cycle_notes),
+        )
 
 
 class Profile:
