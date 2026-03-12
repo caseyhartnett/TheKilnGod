@@ -1,10 +1,10 @@
 #!/usr/bin/env python
+import datetime
+import time
+
+import adafruit_bitbangio as bitbangio
 import config
 from digitalio import DigitalInOut
-import time
-import datetime
-import busio
-import adafruit_bitbangio as bitbangio
 
 try:
     import board
@@ -60,15 +60,38 @@ if(config.max31856):
 
 print("Degrees displayed in %s\n" % (config.temp_scale))
 
-temp = 0
-while(True):
-    time.sleep(1)
-    try:
-        temp = sensor.temperature
-        scale = "C"
-        if config.temp_scale == "f":
-            temp = temp * (9/5) + 32 
-            scale ="F"
-        print("%s %0.2f%s" %(datetime.datetime.now(),temp,scale))
-    except Exception as error:
-        print("error: " , error)
+
+def format_temp(temp_c):
+    value = temp_c
+    scale = "C"
+    if config.temp_scale == "f":
+        value = temp_c * (9 / 5) + 32
+        scale = "F"
+    return f"{value:0.2f}{scale}"
+
+
+try:
+    while True:
+        time.sleep(1)
+        try:
+            temp_c = sensor.temperature
+            if config.max31856:
+                ref_c = sensor.reference_temperature
+                fault = sensor.fault
+                print(
+                    f"{datetime.datetime.now()} "
+                    f"probe={format_temp(temp_c)} "
+                    f"ref={format_temp(ref_c)} "
+                    f"fault={fault}"
+                )
+                if temp_c == 0.0 and ref_c == 0.0 and not any(fault.values()):
+                    print(
+                        "  note: both readings are 0.0C with no faults; "
+                        "this often means SPI comms are returning all zeros"
+                    )
+            else:
+                print("%s %s" % (datetime.datetime.now(), format_temp(temp_c)))
+        except Exception as error:
+            print("error: ", error)
+except KeyboardInterrupt:
+    print("\nstopped")
