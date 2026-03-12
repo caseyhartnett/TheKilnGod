@@ -13,6 +13,10 @@ ha_mqtt_password = "your_mqtt_password"
 # api_monitor_token = "set_a_long_random_monitor_token"
 # api_control_token = "set_a_long_random_control_token"
 
+# Optional ui-v2 password
+# Set as an environment variable instead of storing it in secrets.py:
+#   export KILN_UI_PASSWORD="your_ui_password"
+
 # Optional ntfy notifications
 # notifications_enabled = True
 # notification_provider = "ntfy"

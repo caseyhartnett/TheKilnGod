@@ -1,3 +1,0 @@
-# Runtime dependencies are declared in pyproject.toml.
-# Keep this file for legacy tooling that still uses `pip -r`.
--e .

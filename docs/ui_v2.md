@@ -7,20 +7,26 @@
 Implemented:
 
 - Live websocket connection to `/status`
+- Live profile loading and saving over `/storage`
 - Core telemetry cards
 - Last-5-minute error chart
 - Last-5-minute relay on/off chart
 - Profile-aware run controls (start/pause/resume/stop)
 - `startat` minute support for run resume/skip starts
+- Full-run temperature/target chart with zoom window
+- Full-run current/voltage charts
+- Run health trend view backed by `/api/run-health`
+- Profile schedule builder with save/overwrite flow
 - Optional control token support (`X-API-Token`) for command auth
 - Optional monitor token support for websocket monitor channels (`/status`, `/storage`)
+- Session-scoped browser token storage (with one-time fallback read from old `localStorage`)
+- Optional lightweight UI lock using the `KILN_UI_PASSWORD` environment variable
 - Safety UX:
   - state-aware button enabling/disabling
   - confirmation prompts for control commands
   - stale/sensor fault warning banner
 - Event timeline for key operational transitions
 - Profile preflight validation before start
-- Dark theme aligned with Torrify palette direction
 
 ## Run locally
 
@@ -49,10 +55,17 @@ This is served by the existing static route and available at:
 - `/v2`
 - `/picoreflow/v2/index.html`
 
-## Next steps
+## Current gaps
 
-1. Add run controls (start/pause/resume/stop) with confirmation modals.
-2. Add profile list/read view, then profile edit UX.
-3. Add stale stream visual alarm and fault banners.
-4. Add API polling fallback if websocket is unavailable.
-5. Add auth-compatible client wrapper once backend auth is introduced.
+1. Add dedicated frontend test coverage for command flows, builder validation, and auth/token UX.
+2. Handle websocket auth failures with clearer inline UI states instead of silent reconnect loops.
+3. Add more explicit backlog rendering from `/status` so reconnects can repopulate charts immediately.
+4. Consider replacing `window.confirm` prompts with first-class modal components.
+
+## Optional UI Password
+
+If the server environment defines `KILN_UI_PASSWORD`, `ui-v2` shows a password prompt before revealing telemetry and controls.
+
+- The unlock persists for the current browser session via an HTTP-only cookie.
+- If `KILN_UI_PASSWORD` is unset, the password screen is skipped automatically.
+- This is a convenience/accidental-use guard for the UI only; it does not add backend API security.

@@ -43,6 +43,9 @@ thekilngod-run-health-trends = "thekilngod.run_health_trends:main"
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+thekilngod = ["images/hex/*.hex"]
+
 [tool.setuptools.packages.find]
 where = ["src"]
 
@@ -53,8 +56,6 @@ src = ["src", "tests", "scripts"]
 extend-exclude = [
   "config.py",
   "lib",
-  "display.py",
-  "display_example.py",
   "secrets_example.py",
   "tests/hardware",
   "scripts/gpio_readall.py",

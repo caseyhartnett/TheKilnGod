@@ -33,8 +33,10 @@ FIXME - need instructions on branch names to checkout etc.
 
 ```
 cd TheKilnGod
-source venv/bin/activate
-pip install -r ./requirements.txt
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -e .
 ```
 
   4. find these settings in config.py.bak and change them in config.py:
@@ -73,4 +75,3 @@ pip install -r ./requirements.txt
 ```
 
   Every 5 seconds, verify the output is flipped from on to off or vice versa.
-

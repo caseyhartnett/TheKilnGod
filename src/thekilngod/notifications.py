@@ -202,7 +202,10 @@ class NotificationManager:
                 if current_amps is None:
                     return (
                         "Kiln Power Warning",
-                        f"Heater was commanded but current remained below threshold for {window:.0f}s.",
+                        (
+                            "Heater was commanded but current remained below "
+                            f"threshold for {window:.0f}s."
+                        ),
                         "high",
                         ["kiln", "issue", "power"],
                     )
@@ -242,7 +245,8 @@ class NotificationManager:
                     "Kiln Catch-Up Shadow",
                     (
                         "Shadow mode: run would be aborted for sustained inability to catch up "
-                        f"(avg lag {avg_error:.1f}{temp_scale}, lag duration {lagging/60.0:.0f}m)."
+                        f"(avg lag {avg_error:.1f}{temp_scale}, "
+                        f"lag duration {lagging / 60.0:.0f}m)."
                     ),
                     "high",
                     ["kiln", "issue", "shadow", "alert"],

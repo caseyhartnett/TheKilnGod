@@ -76,6 +76,13 @@ body {
   border: 1px solid var(--bg-border);
 }
 
+#run-reason {
+  min-width: 360px;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.25;
+}
+
 #stream-status {
   margin: 6px;
   padding: 6px 10px;

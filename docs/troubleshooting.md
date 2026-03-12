@@ -24,7 +24,7 @@ If you're using a breadboard with a labeled break-out board, verify:
 I thought at one point that I had fried my RPi.  I needed to verify that it
 still worked as expected.  Here's what I did to verify GPIO on my pi.
 
-```source venv/bin/activate; ./thekilngod gpio-readall```
+```source .venv/bin/activate; ./thekilngod gpio-readall```
 
 and you'll get output that looks something like this...
 

@@ -35,9 +35,9 @@ Turns a Raspberry Pi into an inexpensive, web-enabled kiln controller.
 
 ![Image](https://github.com/caseyhartnett/TheKilnGod/blob/main/public/assets/images/kiln-schedule.png)
 
-## UI v2 (Experimental)
+## UI v2
 
-A modern dashboard is available under `ui-v2/` and can be built into `public/v2`.
+A modern dashboard is available under `ui-v2/` and builds into `public/v2`.
 
 - Open directly at: `http://<kiln-ip>:8081/v2`
 - Development server:
@@ -76,7 +76,7 @@ The current default pin configuration (as defined in `config.py`) uses:
 - SPI MOSI: BCM pin 19
 
 **Relay Control:**
-- GPIO Heat: BCM pin 7 (inverted output)
+- GPIO Heat: BCM pin 16 (non-inverted output by default)
 
 **Display (I2C):**
 - I2C SDA: Standard I2C pin (BCM pin 2 on Raspberry Pi)
@@ -113,16 +113,30 @@ Download [Raspberry PI OS](https://www.raspberrypi.org/software/). Use Rasberry 
     $ sudo apt-get dist-upgrade
     $ git clone https://github.com/caseyhartnett/TheKilnGod
     $ cd TheKilnGod
-    $ python3 -m venv venv
-    $ source venv/bin/activate
-    $ pip install -r requirements.txt
-    $ pip install -e .
+    $ python3 -m venv .venv
+    $ source .venv/bin/activate
+    $ python -m pip install --upgrade pip
+    $ python -m pip install -e .
 
 For development tooling (ruff, mypy, pytest, pre-commit):
 
-    $ pip install -r requirements-dev.txt
+    $ python -m pip install -e .[dev]
 
-Dependency source of truth is `pyproject.toml`; `requirements*.txt` are thin convenience entrypoints.
+Canonical environment workflow:
+
+- Create and use a repo-local virtualenv at `.venv/`.
+- Install runtime dependencies from `pyproject.toml` with `python -m pip install -e .`.
+- Install development tooling with `python -m pip install -e .[dev]`.
+
+### Verification
+
+Current repo health checks:
+
+    $ .venv/bin/ruff check src tests scripts ui-v2/src
+    $ .venv/bin/ruff format --check src tests scripts ui-v2/src
+    $ .venv/bin/mypy src
+    $ .venv/bin/pytest
+    $ cd ui-v2 && npm run build
 
 *Note: The above steps work on ubuntu if you prefer*
 
@@ -163,9 +177,9 @@ For security, keep sensitive values (passwords/tokens) in `secrets.py`, which ov
 | sensor_time_wait | 2 seconds | It's the duty cycle for the entire system.  It's set to two seconds by default which means that a decision is made every 2s about whether to turn on relay[s] and for how long. If you use mechanical relays, you may want to increase this. At 2s, my SSR switches 11,000 times in 13 hours. |
 | temp_scale | f | f for farenheit, c for celcius |
 | pid parameters | | Used to tune your kiln. See PID Tuning. |
-| simulate | True | Simulate a kiln. Used to test the software by new users so they can check out the features. |
+| simulate | False | Run against real hardware by default. Set to `True` for simulation/dev exploration. |
 | max31856 | 1 | Set to 1 to use MAX31856 thermocouple board (supports multiple thermocouple types), 0 for MAX31855 (K-type only) |
-| thermocouple_type | S | Thermocouple type when using MAX31856 (B, E, J, K, N, R, S, or T) |
+| thermocouple_type | K | Thermocouple type when using MAX31856 (B, E, J, K, N, R, S, or T) |
 | display_enabled | True | Enable/disable the OLED display |
 | display_i2c_address | 0x3C | I2C address of the OLED display |
 | display_i2c_port | 1 | I2C port number (typically 1 on Raspberry Pi) |
@@ -178,7 +192,7 @@ For security, keep sensitive values (passwords/tokens) in `secrets.py`, which ov
 | run_health_exclusions_file | `<repo>/storage/logs/run-health-exclusions.json` | JSON list of run IDs excluded from health trend analysis |
 | power_sensor_enabled | False | Enable optional PZEM-004T power/current/voltage reader |
 | power_sensor_port | `/dev/ttyUSB0` | UART serial device for PZEM-004T |
-| power_sensor_scale_factor | 2.0 | Multiplier applied to current/power/energy values |
+| power_sensor_scale_factor | 2.0 | Multiplier applied to current/power/energy values in live telemetry, MQTT, logs, and run summaries |
 | power_sensor_current_threshold_amps | 0.25 | Minimum current expected while heater is commanded on |
 | power_sensor_no_current_window_seconds | 30 | Time window before raising no-current warning |
 | power_sensor_stale_alert_seconds | 30 | Time without new power samples before stale warning |
@@ -240,6 +254,24 @@ Related config settings:
 - `power_sensor_mismatch_cooldown_seconds`
 - `power_sensor_stale_alert_seconds`
 - `power_sensor_stale_cooldown_seconds`
+
+### API and UI Security Notes
+
+- `api_control_token` and `api_monitor_token` are optional but strongly recommended on any networked deployment.
+- HTTP endpoints accept `X-API-Token`; browser websocket clients use `?token=...` because browsers do not allow custom websocket headers.
+- `ui-v2` now stores monitor/control tokens in browser `sessionStorage` by default, so they clear when the browser session ends.
+- Profile names sent through the storage API are validated server-side and must stay within the configured profile directory.
+- `ui-v2` can optionally require a lightweight shared password by setting `KILN_UI_PASSWORD` in the server environment.
+- If `KILN_UI_PASSWORD` is unset, the `ui-v2` password prompt is disabled automatically.
+
+Example systemd environment override:
+
+```ini
+[Service]
+Environment="KILN_UI_PASSWORD=your_ui_password"
+```
+
+This password gate is intentionally lightweight and only protects the `ui-v2` experience. It does not secure backend API routes by itself.
 
 ## Home Assistant Integration
 
@@ -317,7 +349,7 @@ mqtt:
 
 After you've completed connecting all the hardware together, there are scripts to test the thermocouple and to test the output to the solid state relay. Read the scripts below and then start your testing. First, activate the virtual environment like so...
 
-     $ source venv/bin/activate
+     $ source .venv/bin/activate
 
 then test the thermocouple with:
 
@@ -370,7 +402,7 @@ Unified CLI entrypoint:
 
 ### Server Startup
 
-    $ source venv/bin/activate; ./thekilngod server
+    $ source .venv/bin/activate; ./thekilngod server
 
 ### Autostart Server onBoot
 If you want the server to autostart on boot, run the following command:

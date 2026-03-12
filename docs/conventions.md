@@ -11,7 +11,15 @@
 - Operational/debug scripts: `scripts/`.
 - Tests: `tests/unit`, `tests/integration`, `tests/hardware`.
 
+## Python Env
+- Canonical virtual environment path: `.venv/`.
+- Runtime install: `.venv/bin/python -m pip install -e .`
+- Development install: `.venv/bin/python -m pip install -e .[dev]`
+- `pyproject.toml` is the dependency source of truth.
+
 ## Quality Gates
-- Lint/format: `ruff`.
-- Typing: `mypy` (permissive mode during migration).
-- Test default excludes hardware-marked tests.
+- Lint: `.venv/bin/ruff check src tests scripts ui-v2/src`
+- Format check: `.venv/bin/ruff format --check src tests scripts ui-v2/src`
+- Typing: `.venv/bin/mypy src`
+- Tests: `.venv/bin/pytest` (default excludes hardware-marked tests)
+- Frontend build smoke test: `cd ui-v2 && npm run build`

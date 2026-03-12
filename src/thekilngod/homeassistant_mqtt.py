@@ -130,11 +130,13 @@ class HomeAssistantMQTT(threading.Thread):
                     self.publish("sensor/heat_rate/state", str(round(heat_rate, 2)))
                     if telemetry.get("line_voltage_now") is not None:
                         self.publish(
-                            "sensor/line_voltage/state", str(round(telemetry["line_voltage_now"], 2))
+                            "sensor/line_voltage/state",
+                            str(round(telemetry["line_voltage_now"], 2)),
                         )
                     if telemetry.get("line_current_now") is not None:
                         self.publish(
-                            "sensor/line_current/state", str(round(telemetry["line_current_now"], 3))
+                            "sensor/line_current/state",
+                            str(round(telemetry["line_current_now"], 3)),
                         )
                     if telemetry.get("line_power_now") is not None:
                         self.publish(

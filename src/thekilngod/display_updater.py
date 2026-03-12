@@ -39,8 +39,7 @@ class DisplayUpdater(threading.Thread):
         self.retry_interval = 30.0
 
         if self.display.initialized:
-            self.display.show_message("Kiln Controller", line=2)
-            time.sleep(1)
+            self.display.show_startup_sequence(loops=1, frame_delay=0.12)
             log.info("Display updater initialized")
         else:
             log.warning("Display not initialized, updater will retry")
@@ -52,27 +51,28 @@ class DisplayUpdater(threading.Thread):
         self.last_retry = now
         self.display = KilnDisplay()
         if self.display.initialized:
-            self.display.show_message("Display Ready", line=2)
-            time.sleep(0.5)
+            self.display.show_startup_sequence(loops=1, frame_delay=0.12)
             log.info("Display re-initialized")
 
     def _render_transition_banner(self, state, profile):
         if not self.display.initialized:
             return
-        profile_name = (profile or "")[:18]
         if state == "RUNNING":
-            self.display.show_message("Firing Started", line=1)
-            if profile_name:
-                self.display.show_message(profile_name, line=2)
+            self.display.show_firing_transition(
+                pottery_hold_seconds=1.0,
+                frame_delay=0.14,
+                cycles=1,
+            )
         elif state == "PAUSED":
-            self.display.show_message("Firing Paused", line=1)
-            if profile_name:
-                self.display.show_message(profile_name, line=2)
+            self.display.show_message("Paused", line=1)
         elif state == "IDLE":
-            self.display.show_message("Kiln Idle", line=1)
+            self.display.show_message("Idle", line=1)
         else:
             self.display.show_message(f"State: {state}", line=1)
-        time.sleep(0.8)
+        if state != "RUNNING":
+            if profile:
+                self.display.show_message(str(profile)[:21], line=2)
+            time.sleep(0.6)
 
     def run(self):
         """Main loop that updates the display"""
@@ -105,18 +105,11 @@ class DisplayUpdater(threading.Thread):
                 time.sleep(self.update_interval)
 
 
-# Example of how to integrate this into kiln-controller.py:
+# Example integration:
 #
-# In kiln-controller.py, after creating the oven object:
-#
-#   from display_example import DisplayUpdater
-#
-#   # Create and start display updater
+#   from thekilngod.display_updater import DisplayUpdater
 #   display_updater = DisplayUpdater(oven, update_interval=2.0)
 #   display_updater.start()
-#
-# The display will automatically update every 2 seconds with the current
-# kiln state information.
 
 if __name__ == "__main__":
     # Simple test/demo

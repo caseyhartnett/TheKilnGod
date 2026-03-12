@@ -1,8 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Profile, RunHealthEntry, Sample, StatusMessage } from './types'
+import type {
+  BacklogMessage,
+  ConfigMessage,
+  Profile,
+  RunHealthEntry,
+  RunSummaryMessage,
+  Sample,
+  StatusMessage
+} from './types'
 
-const WINDOW_SECONDS = 300
+const DEFAULT_RECENT_WINDOW_SECONDS = 300
+const MAX_RECENT_WINDOW_SECONDS = 7200
 const EVENT_LIMIT = 50
+const RECENT_WINDOW_OPTIONS = [
+  { label: '5 min', seconds: 300 },
+  { label: '15 min', seconds: 900 },
+  { label: '30 min', seconds: 1800 },
+  { label: '1 hour', seconds: 3600 },
+  { label: '2 hours', seconds: 7200 }
+] as const
 
 interface UiEvent {
   ts: number
@@ -22,17 +38,6 @@ interface PowerPoint {
   current: number | null
   voltage: number | null
   clockSec: number
-}
-
-interface RunSummary {
-  completedAt: number
-  profile: string
-  durationHours: number
-  maxTemp: number
-  maxOvershoot: number
-  within5Run: number
-  switchesPerHour: number
-  cost: number
 }
 
 interface TrendPoint {
@@ -74,24 +79,62 @@ function pct(n: number | undefined): string {
   return `${n.toFixed(1)}%`
 }
 
+function formatOutcomeKind(kind: string | undefined): string {
+  if (kind === 'complete') return 'Completed'
+  if (kind === 'error') return 'Error'
+  if (kind === 'stopped') return 'Stopped'
+  return 'Status'
+}
+
 function polyline(
   samples: Sample[],
   width: number,
   height: number,
   value: (s: Sample) => number,
   minV: number,
-  maxV: number
+  maxV: number,
+  startT?: number,
+  endT?: number
 ): string {
   if (!samples.length) return ''
-  const span = Math.max(1, samples[samples.length - 1].t - samples[0].t)
+  const minT = startT ?? samples[0].t
+  const maxT = endT ?? samples[samples.length - 1].t
+  const span = Math.max(1, maxT - minT)
   const range = Math.max(0.001, maxV - minV)
   return samples
     .map((s) => {
-      const x = ((s.t - samples[0].t) / span) * width
+      const x = ((s.t - minT) / span) * width
       const y = height - ((value(s) - minV) / range) * height
       return `${x.toFixed(1)},${y.toFixed(1)}`
     })
     .join(' ')
+}
+
+function formatWindowLabel(seconds: number): string {
+  if (seconds % 3600 === 0) {
+    const hours = seconds / 3600
+    return `${hours}h`
+  }
+  return `${Math.round(seconds / 60)}m`
+}
+
+function formatConfigValue(value: unknown): string {
+  if (value == null || value === '') return '--'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  return String(value)
+}
+
+function formatDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '--'
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.round((seconds % 3600) / 60)
+  if (hours <= 0) return `${minutes} min`
+  if (minutes <= 0) return `${hours} h`
+  return `${hours} h ${minutes} min`
+}
+
+function isBacklogMessage(payload: StatusMessage | BacklogMessage): payload is BacklogMessage {
+  return (payload as BacklogMessage).type === 'backlog'
 }
 
 export default function App() {
@@ -101,7 +144,9 @@ export default function App() {
   const [lastMessageAt, setLastMessageAt] = useState<number>(0)
   const [clockTick, setClockTick] = useState<number>(Date.now())
   const [profiles, setProfiles] = useState<Profile[]>([])
+  const [configState, setConfigState] = useState<ConfigMessage>({})
   const [selectedProfile, setSelectedProfile] = useState<string>('')
+  const [recentWindowSeconds, setRecentWindowSeconds] = useState<number>(DEFAULT_RECENT_WINDOW_SECONDS)
   const [apiState, setApiState] = useState<string>('')
   const [startAtMinutes, setStartAtMinutes] = useState<number>(0)
   const [builderName, setBuilderName] = useState<string>('new-schedule')
@@ -114,26 +159,100 @@ export default function App() {
   const [builderError, setBuilderError] = useState<string>('')
   const [builderSaving, setBuilderSaving] = useState<boolean>(false)
   const [events, setEvents] = useState<UiEvent[]>([])
-  const [monitorToken, setMonitorToken] = useState<string>(() => window.localStorage.getItem('kiln_monitor_token') ?? '')
-  const [controlToken, setControlToken] = useState<string>(() => window.localStorage.getItem('kiln_api_token') ?? '')
+  const [monitorToken, setMonitorToken] = useState<string>(
+    () =>
+      window.sessionStorage.getItem('kiln_monitor_token') ??
+      window.localStorage.getItem('kiln_monitor_token') ??
+      ''
+  )
+  const [controlToken, setControlToken] = useState<string>(
+    () =>
+      window.sessionStorage.getItem('kiln_api_token') ??
+      window.localStorage.getItem('kiln_api_token') ??
+      ''
+  )
   const [runPoints, setRunPoints] = useState<RunPoint[]>([])
   const [powerPoints, setPowerPoints] = useState<PowerPoint[]>([])
-  const [runSummary, setRunSummary] = useState<RunSummary | null>(null)
+  const [runSummary, setRunSummary] = useState<RunSummaryMessage | null>(null)
   const [healthRows, setHealthRows] = useState<RunHealthEntry[]>([])
   const [healthLimit, setHealthLimit] = useState<number>(40)
   const [healthIncludeExcluded, setHealthIncludeExcluded] = useState<boolean>(false)
   const [healthLoading, setHealthLoading] = useState<boolean>(false)
   const [healthError, setHealthError] = useState<string>('')
   const [viewStartHour, setViewStartHour] = useState<number>(0)
-  const [viewEndHour, setViewEndHour] = useState<number>(1)
+  const [viewEndHour, setViewEndHour] = useState<number>(0)
   const [hoverRuntimeHour, setHoverRuntimeHour] = useState<number | null>(null)
+  const [uiAuthEnabled, setUiAuthEnabled] = useState<boolean>(false)
+  const [uiUnlocked, setUiUnlocked] = useState<boolean>(true)
+  const [uiPasswordEntry, setUiPasswordEntry] = useState<string>('')
+  const [uiAuthLoading, setUiAuthLoading] = useState<boolean>(false)
+  const [uiAuthError, setUiAuthError] = useState<string>('')
   const prevStatusRef = useRef<StatusMessage | null>(null)
   const lastRuntimeRef = useRef<number>(0)
   const runPointsRef = useRef<RunPoint[]>([])
+  const lastRunSummaryKeyRef = useRef<string>('')
   const demoMode = useMemo(() => new URLSearchParams(window.location.search).get('demo') === '1', [])
 
   const addEvent = (level: UiEvent['level'], text: string) => {
     setEvents((prev) => [{ ts: Date.now(), level, text }, ...prev].slice(0, EVENT_LIMIT))
+  }
+
+  const refreshUiAuthStatus = async () => {
+    if (demoMode) {
+      setUiAuthEnabled(false)
+      setUiUnlocked(true)
+      setUiAuthError('')
+      return
+    }
+
+    try {
+      const resp = await fetch('/ui-auth/status')
+      const data = (await resp.json()) as { enabled?: boolean; unlocked?: boolean }
+      const enabled = !!data.enabled
+      setUiAuthEnabled(enabled)
+      setUiUnlocked(!enabled || !!data.unlocked)
+      setUiAuthError('')
+    } catch {
+      // Fail open when the optional UI guard cannot be checked.
+      setUiAuthEnabled(false)
+      setUiUnlocked(true)
+      setUiAuthError('')
+    }
+  }
+
+  const unlockUi = async () => {
+    setUiAuthLoading(true)
+    setUiAuthError('')
+    try {
+      const resp = await fetch('/ui-auth/unlock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: uiPasswordEntry })
+      })
+      const data = (await resp.json()) as { success?: boolean; error?: string; unlocked?: boolean }
+      if (!resp.ok || !data.success || !data.unlocked) {
+        setUiAuthError(data.error ?? 'Incorrect password')
+        return
+      }
+      setUiUnlocked(true)
+      setUiPasswordEntry('')
+      addEvent('info', 'UI unlocked for this browser session')
+    } catch {
+      setUiAuthError('Unable to unlock UI right now')
+    } finally {
+      setUiAuthLoading(false)
+    }
+  }
+
+  const lockUi = async () => {
+    try {
+      await fetch('/ui-auth/lock', { method: 'POST' })
+    } catch {
+      // Ignore lock endpoint failures and still hide the UI locally.
+    }
+    setUiUnlocked(false)
+    setUiPasswordEntry('')
+    setUiAuthError('')
   }
 
   const addBuilderSegment = () => {
@@ -198,6 +317,10 @@ export default function App() {
   }
 
   useEffect(() => {
+    void refreshUiAuthStatus()
+  }, [demoMode])
+
+  useEffect(() => {
     if (demoMode) {
       const startMs = Date.now()
       const id = window.setInterval(() => {
@@ -254,7 +377,7 @@ export default function App() {
         setSamples((prev) => {
           const now = Date.now() / 1000
           const next = [...prev, { t: now, error: err, heatOn }]
-          const cutoff = now - WINDOW_SECONDS
+          const cutoff = now - MAX_RECENT_WINDOW_SECONDS
           return next.filter((s) => s.t >= cutoff)
         })
         setRunPoints((prev) => {
@@ -293,8 +416,84 @@ export default function App() {
       ws = new WebSocket(getWsUrl('/status', monitorToken))
 
       ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data) as StatusMessage
+        const payload = JSON.parse(event.data) as StatusMessage | BacklogMessage
+        if (isBacklogMessage(payload)) {
+          const backlogProfile = payload.profile
+          if (backlogProfile?.name && Array.isArray(backlogProfile.data)) {
+            setProfiles((prev) => {
+              const idx = prev.findIndex((profile) => profile.name === backlogProfile.name)
+              if (idx >= 0) {
+                const next = [...prev]
+                next[idx] = backlogProfile
+                return next
+              }
+              return [...prev, backlogProfile]
+            })
+            setSelectedProfile((prev) => prev || backlogProfile.name)
+          }
+
+          if (!runPointsRef.current.length && Array.isArray(payload.log) && payload.log.length) {
+            const backlogLog = payload.log
+            const latest = backlogLog[backlogLog.length - 1]
+
+            const nextSamples = backlogLog
+              .filter((entry) => entry.pidstats && typeof entry.pidstats.time === 'number')
+              .map((entry) => ({
+                t: entry.pidstats!.time,
+                error: entry.pidstats!.setpoint - entry.pidstats!.ispoint,
+                heatOn: entry.pidstats!.out > 0 ? 1 : 0
+              }))
+            const latestSampleTime = nextSamples[nextSamples.length - 1]?.t
+            if (latestSampleTime != null) {
+              const cutoff = latestSampleTime - MAX_RECENT_WINDOW_SECONDS
+              setSamples(nextSamples.filter((sample) => sample.t >= cutoff))
+            }
+
+            const nextRunPoints = backlogLog
+              .filter(
+                (entry) =>
+                  typeof entry.runtime === 'number' &&
+                  typeof entry.temperature === 'number' &&
+                  typeof entry.target === 'number'
+              )
+              .map((entry) => ({
+                runtimeHours: entry.runtime! / 3600,
+                temperature: entry.temperature!,
+                target: entry.target!,
+                clockSec: entry.pidstats?.time ?? Date.now() / 1000
+              }))
+            if (nextRunPoints.length) {
+              setRunPoints(nextRunPoints)
+              lastRuntimeRef.current = nextRunPoints[nextRunPoints.length - 1].runtimeHours * 3600
+            }
+
+            const nextPowerPoints = backlogLog
+              .filter((entry) => typeof entry.runtime === 'number')
+              .map((entry) => ({
+                runtimeHours: entry.runtime! / 3600,
+                current: entry.telemetry?.line_current_now ?? null,
+                voltage: entry.telemetry?.line_voltage_now ?? null,
+                clockSec: entry.pidstats?.time ?? Date.now() / 1000
+              }))
+            if (nextPowerPoints.length) {
+              setPowerPoints(nextPowerPoints)
+            }
+
+            setStatus(latest)
+            setRunSummary(latest.last_run_summary ?? null)
+            setLastMessageAt(Date.now())
+            prevStatusRef.current = latest
+            if (latest.last_run_summary?.ended_at) {
+              lastRunSummaryKeyRef.current = `${latest.last_run_summary.run_id ?? 'run'}:${latest.last_run_summary.ended_at}:${latest.last_run_summary.reason ?? ''}`
+            }
+            addEvent('info', 'Recovered live run history from controller backlog')
+          }
+          return
+        }
+
+        const msg = payload
         setStatus(msg)
+        setRunSummary(msg.last_run_summary ?? null)
         setLastMessageAt(Date.now())
 
         if (msg.pidstats) {
@@ -304,7 +503,7 @@ export default function App() {
 
           setSamples((prev) => {
             const next = [...prev, { t: now, error, heatOn }]
-            const cutoff = now - WINDOW_SECONDS
+            const cutoff = now - MAX_RECENT_WINDOW_SECONDS
             return next.filter((s) => s.t >= cutoff)
           })
         }
@@ -347,25 +546,17 @@ export default function App() {
         if (prev && prev.state !== msg.state && msg.state) {
           addEvent('info', `State changed: ${prev.state ?? 'UNKNOWN'} -> ${msg.state}`)
         }
-        if (
-          prev &&
-          (prev.state === 'RUNNING' || prev.state === 'PAUSED') &&
-          msg.state === 'IDLE'
-        ) {
-          const maxTemp = runPointsRef.current.length
-            ? Math.max(...runPointsRef.current.map((p) => p.temperature))
-            : (prev.temperature ?? 0)
-          setRunSummary({
-            completedAt: Date.now(),
-            profile: (prev as StatusMessage & { profile?: string }).profile || 'unknown',
-            durationHours: (prev.runtime ?? 0) / 3600,
-            maxTemp,
-            maxOvershoot: prev.telemetry?.overshoot_max_run ?? 0,
-            within5Run: prev.telemetry?.within_5deg_pct_run ?? 0,
-            switchesPerHour: prev.telemetry?.switches_per_hour_run ?? 0,
-            cost: prev.cost ?? 0
-          })
-          addEvent('info', 'Run summary captured')
+        const summary = msg.last_run_summary
+        if (summary?.ended_at) {
+          const summaryKey = `${summary.run_id ?? 'run'}:${summary.ended_at}:${summary.reason ?? ''}`
+          if (lastRunSummaryKeyRef.current !== summaryKey) {
+            const level: UiEvent['level'] =
+              summary.reason_kind === 'error' ? 'error' : summary.reason_kind === 'stopped' ? 'warn' : 'info'
+            const text = summary.reason_text ?? summary.reason ?? 'Run finished'
+            setApiState(text)
+            addEvent(level, text)
+            lastRunSummaryKeyRef.current = summaryKey
+          }
         }
         if (prev && prev.catching_up !== msg.catching_up) {
           addEvent(msg.catching_up ? 'warn' : 'info', msg.catching_up ? 'Catch-up active' : 'Catch-up cleared')
@@ -388,7 +579,7 @@ export default function App() {
       if (ws) ws.close()
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer)
     }
-  }, [demoMode, monitorToken])
+  }, [demoMode, monitorToken, uiAuthEnabled, uiUnlocked])
 
   useEffect(() => {
     const id = window.setInterval(() => setClockTick(Date.now()), 1000)
@@ -403,6 +594,10 @@ export default function App() {
     if (demoMode) {
       setProfiles(DEMO_PROFILES)
       setSelectedProfile((prev) => prev || DEMO_PROFILES[0].name)
+      return
+    }
+    if (uiAuthEnabled && !uiUnlocked) {
+      setProfiles([])
       return
     }
 
@@ -435,7 +630,87 @@ export default function App() {
       if (ws) ws.close()
       if (reconnectTimer != null) window.clearTimeout(reconnectTimer)
     }
-  }, [demoMode, monitorToken])
+  }, [demoMode, monitorToken, uiAuthEnabled, uiUnlocked])
+
+  useEffect(() => {
+    if (demoMode) {
+      setConfigState({
+        temp_scale: 'f',
+        time_scale_slope: 'h',
+        time_scale_profile: 'm',
+        kwh_rate: 0.14,
+        currency_type: '$',
+        hardware: {
+          simulate: false,
+          relay: { gpio_heat: 'board.D16', gpio_heat_invert: false },
+          buzzer: { gpio_buzzer: 12 },
+          spi: {
+            mode: 'software',
+            spi_sclk: 'board.D23',
+            spi_mosi: 'board.D19',
+            spi_miso: 'board.D21',
+            spi_cs: 'board.D24'
+          },
+          thermocouple: {
+            board: 'max31856',
+            type: 'K',
+            offset: 0,
+            samples_per_cycle: 10,
+            sensor_time_wait: 2
+          },
+          display: {
+            enabled: true,
+            width: 128,
+            height: 64,
+            i2c_address: '0x3c',
+            i2c_port: 1
+          },
+          power_sensor: {
+            enabled: false,
+            type: 'pzem004t',
+            port: '/dev/ttyUSB0',
+            baudrate: 9600,
+            address: 1,
+            poll_interval: 2,
+            timeout: 0.4,
+            stale_seconds: 10
+          }
+        }
+      })
+      return
+    }
+    if (uiAuthEnabled && !uiUnlocked) {
+      setConfigState({})
+      return
+    }
+
+    let ws: WebSocket | null = null
+    let reconnectTimer: number | null = null
+
+    const connect = () => {
+      ws = new WebSocket(getWsUrl('/config', monitorToken))
+      ws.onopen = () => ws?.send('GET')
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data) as ConfigMessage
+          if (data && typeof data === 'object' && !Array.isArray(data)) {
+            setConfigState(data)
+          }
+        } catch {
+          // Ignore unexpected websocket payloads.
+        }
+      }
+      ws.onclose = () => {
+        reconnectTimer = window.setTimeout(connect, 3000)
+      }
+    }
+
+    connect()
+    return () => {
+      if (ws) ws.close()
+      if (reconnectTimer != null) window.clearTimeout(reconnectTimer)
+    }
+  }, [demoMode, monitorToken, uiAuthEnabled, uiUnlocked])
 
   const sendCmd = async (payload: Record<string, unknown>) => {
     if (demoMode) {
@@ -539,48 +814,59 @@ export default function App() {
     if (!lastMessageAt) return 'waiting'
     return clockTick - lastMessageAt <= 5000 ? 'live' : 'stale'
   }, [clockTick, lastMessageAt])
+  const uiIsReady = demoMode || !uiAuthEnabled || uiUnlocked
 
   useEffect(() => {
+    if (!uiIsReady) {
+      setHealthRows([])
+      setHealthLoading(false)
+      setHealthError('')
+      return
+    }
     fetchRunHealth()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [demoMode, healthLimit, healthIncludeExcluded, monitorToken, controlToken])
+  }, [controlToken, demoMode, healthIncludeExcluded, healthLimit, monitorToken, uiIsReady])
+
+  const recentSamples = useMemo(() => {
+    if (!samples.length) return []
+    const latest = samples[samples.length - 1].t
+    const cutoff = latest - recentWindowSeconds
+    return samples.filter((s) => s.t >= cutoff)
+  }, [recentWindowSeconds, samples])
 
   const stats = useMemo(() => {
     const telemetry = status.telemetry ?? {}
+    let recentErrorAvg = 0
+    let recentAbsErrorAvg = 0
+    let recentWithin5 = 0
+    let recentSwitches = 0
+    let recentDuty = 0
 
-    let fallbackErrorAvg5m = 0
-    let fallbackAbsErrorAvg5m = 0
-    let fallbackWithin5 = 0
-    let fallbackSwitches5m = 0
-    let fallbackDuty5m = 0
+    if (recentSamples.length > 0) {
+      const errs = recentSamples.map((s) => s.error)
+      recentErrorAvg = errs.reduce((a, b) => a + b, 0) / errs.length
+      recentAbsErrorAvg = errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length
+      recentWithin5 = (errs.filter((x) => Math.abs(x) <= 5).length / errs.length) * 100
+      recentDuty = (recentSamples.reduce((a, b) => a + b.heatOn, 0) / recentSamples.length) * 100
 
-    if (samples.length > 0) {
-      const errs = samples.map((s) => s.error)
-      fallbackErrorAvg5m = errs.reduce((a, b) => a + b, 0) / errs.length
-      fallbackAbsErrorAvg5m = errs.reduce((a, b) => a + Math.abs(b), 0) / errs.length
-      fallbackWithin5 = (errs.filter((x) => Math.abs(x) <= 5).length / errs.length) * 100
-      fallbackDuty5m = (samples.reduce((a, b) => a + b.heatOn, 0) / samples.length) * 100
-
-      let switches = 0
-      for (let i = 1; i < samples.length; i += 1) {
-        if (samples[i].heatOn !== samples[i - 1].heatOn) switches += 1
+      for (let i = 1; i < recentSamples.length; i += 1) {
+        if (recentSamples[i].heatOn !== recentSamples[i - 1].heatOn) recentSwitches += 1
       }
-      fallbackSwitches5m = switches
     }
 
     return {
-      error5m: telemetry.error_avg_5m ?? fallbackErrorAvg5m,
-      mae5m: telemetry.error_abs_avg_5m ?? fallbackAbsErrorAvg5m,
-      within5m: telemetry.within_5deg_pct_5m ?? fallbackWithin5,
+      errorWindow: recentErrorAvg,
+      maeWindow: recentAbsErrorAvg,
+      withinWindow: recentWithin5,
       withinRun: telemetry.within_5deg_pct_run,
-      switches5m: telemetry.switches_5m ?? fallbackSwitches5m,
+      switchesWindow: recentSwitches,
       switchesHr: telemetry.switches_per_hour_run,
-      duty5m: telemetry.duty_cycle_5m ?? fallbackDuty5m,
+      dutyWindow: recentDuty,
       overshootRun: telemetry.overshoot_max_run,
       sensorErr5m: telemetry.sensor_error_rate_5m,
       catchupRun: telemetry.time_catching_up_pct_run
     }
-  }, [samples, status.telemetry])
+  }, [recentSamples, status.telemetry])
 
   const activeProfile = useMemo(
     () => profiles.find((p) => p.name === selectedProfile),
@@ -763,6 +1049,8 @@ export default function App() {
   const canPause = isRunning
   const canResume = isPaused
   const canStop = isRunning || isPaused
+  const statusReasonText = status.status_reason_text ?? runSummary?.reason_text ?? ''
+  const statusReasonKind = status.status_reason_kind ?? runSummary?.reason_kind ?? ''
 
   const validateProfile = (profile: Profile): string[] => {
     const errs: string[] = []
@@ -815,9 +1103,11 @@ export default function App() {
   }
 
   const onSaveToken = () => {
-    window.localStorage.setItem('kiln_monitor_token', monitorToken)
-    window.localStorage.setItem('kiln_api_token', controlToken)
-    setApiState('Monitor/control tokens saved locally in browser')
+    window.sessionStorage.setItem('kiln_monitor_token', monitorToken)
+    window.sessionStorage.setItem('kiln_api_token', controlToken)
+    window.localStorage.removeItem('kiln_monitor_token')
+    window.localStorage.removeItem('kiln_api_token')
+    setApiState('Monitor/control tokens saved for this browser session')
   }
 
   const onPause = async () => {
@@ -838,15 +1128,61 @@ export default function App() {
   const sensorErr = status.telemetry?.sensor_error_rate_5m ?? 0
   const hasFault = streamState === 'stale' || sensorErr > 30
 
+  const recentWindowLabel = formatWindowLabel(recentWindowSeconds)
+  const recentWindowStart = recentSamples[0]?.t
+  const recentWindowEnd = recentSamples[recentSamples.length - 1]?.t
   const errorPoints = useMemo(() => {
-    const min = Math.min(0, ...samples.map((s) => s.error), -5)
-    const max = Math.max(0, ...samples.map((s) => s.error), 5)
-    return polyline(samples, 560, 140, (s) => s.error, min, max)
-  }, [samples])
+    const min = Math.min(0, ...recentSamples.map((s) => s.error), -5)
+    const max = Math.max(0, ...recentSamples.map((s) => s.error), 5)
+    return polyline(recentSamples, 560, 140, (s) => s.error, min, max, recentWindowStart, recentWindowEnd)
+  }, [recentSamples, recentWindowEnd, recentWindowStart])
 
   const switchPoints = useMemo(
-    () => polyline(samples, 560, 100, (s) => s.heatOn, 0, 1),
-    [samples]
+    () => polyline(recentSamples, 560, 100, (s) => s.heatOn, 0, 1, recentWindowStart, recentWindowEnd),
+    [recentSamples, recentWindowEnd, recentWindowStart]
+  )
+
+  const profileSummary = useMemo(() => {
+    if (!activeProfile || !activeProfile.data.length) return null
+    const peakTarget = Math.max(...activeProfile.data.map((point) => point[1]))
+    const endSeconds = activeProfile.data[activeProfile.data.length - 1]?.[0] ?? 0
+    return {
+      points: activeProfile.data.length,
+      peakTarget,
+      endSeconds
+    }
+  }, [activeProfile])
+
+  const hardwareRows = useMemo(
+    () => [
+      { label: 'Simulation Mode', value: formatConfigValue(configState.hardware?.simulate) },
+      { label: 'Relay Output', value: formatConfigValue(configState.hardware?.relay?.gpio_heat) },
+      { label: 'Relay Inverted', value: formatConfigValue(configState.hardware?.relay?.gpio_heat_invert) },
+      { label: 'Buzzer Pin', value: formatConfigValue(configState.hardware?.buzzer?.gpio_buzzer) },
+      { label: 'SPI Mode', value: formatConfigValue(configState.hardware?.spi?.mode) },
+      { label: 'SPI SCLK', value: formatConfigValue(configState.hardware?.spi?.spi_sclk) },
+      { label: 'SPI MOSI', value: formatConfigValue(configState.hardware?.spi?.spi_mosi) },
+      { label: 'SPI MISO', value: formatConfigValue(configState.hardware?.spi?.spi_miso) },
+      { label: 'SPI CS', value: formatConfigValue(configState.hardware?.spi?.spi_cs) },
+      { label: 'Thermocouple Board', value: formatConfigValue(configState.hardware?.thermocouple?.board) },
+      { label: 'Thermocouple Type', value: formatConfigValue(configState.hardware?.thermocouple?.type) },
+      { label: 'Thermocouple Offset', value: formatConfigValue(configState.hardware?.thermocouple?.offset) },
+      { label: 'Samples / Cycle', value: formatConfigValue(configState.hardware?.thermocouple?.samples_per_cycle) },
+      { label: 'Cycle Time (s)', value: formatConfigValue(configState.hardware?.thermocouple?.sensor_time_wait) },
+      { label: 'Display Enabled', value: formatConfigValue(configState.hardware?.display?.enabled) },
+      { label: 'Display Size', value: `${formatConfigValue(configState.hardware?.display?.width)} x ${formatConfigValue(configState.hardware?.display?.height)}` },
+      { label: 'Display I2C Address', value: formatConfigValue(configState.hardware?.display?.i2c_address) },
+      { label: 'Display I2C Port', value: formatConfigValue(configState.hardware?.display?.i2c_port) },
+      { label: 'Power Sensor Enabled', value: formatConfigValue(configState.hardware?.power_sensor?.enabled) },
+      { label: 'Power Sensor Type', value: formatConfigValue(configState.hardware?.power_sensor?.type) },
+      { label: 'Power Sensor Port', value: formatConfigValue(configState.hardware?.power_sensor?.port) },
+      { label: 'Power Sensor Baud', value: formatConfigValue(configState.hardware?.power_sensor?.baudrate) },
+      { label: 'Power Sensor Address', value: formatConfigValue(configState.hardware?.power_sensor?.address) },
+      { label: 'Power Poll (s)', value: formatConfigValue(configState.hardware?.power_sensor?.poll_interval) },
+      { label: 'Power Timeout (s)', value: formatConfigValue(configState.hardware?.power_sensor?.timeout) },
+      { label: 'Power Stale (s)', value: formatConfigValue(configState.hardware?.power_sensor?.stale_seconds) }
+    ],
+    [configState]
   )
 
   const runChart = useMemo(() => {
@@ -1139,6 +1475,52 @@ export default function App() {
     setViewStartHour((prev) => Math.max(0, Math.min(prev, xMax - 0.01)))
   }, [runDurationHours])
 
+  useEffect(() => {
+    if (runPoints.length > 0 || !activeProfile?.data.length) return
+    const durationHours = activeProfile.data[activeProfile.data.length - 1][0] / 3600
+    setViewStartHour(0)
+    setViewEndHour(Math.max(0.1, durationHours))
+  }, [activeProfile, runPoints.length])
+
+  if (!uiIsReady) {
+    return (
+      <main className="app">
+        <header className="topbar">
+          <div>
+            <h1>Kiln UI v2</h1>
+            <p>Password required for this browser session</p>
+          </div>
+          <div className="pill waiting">Locked</div>
+        </header>
+        <section className="card builder-card">
+          <h3>Unlock UI</h3>
+          <p className="api-state">Enter the shared UI password to reveal controls and telemetry.</p>
+          <div className="builder-grid">
+            <label htmlFor="ui-password">Password</label>
+            <input
+              id="ui-password"
+              type="password"
+              value={uiPasswordEntry}
+              onChange={(e) => setUiPasswordEntry(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && uiPasswordEntry.trim()) {
+                  void unlockUi()
+                }
+              }}
+              autoFocus
+            />
+          </div>
+          <div className="controls-row builder-actions">
+            <button type="button" onClick={() => void unlockUi()} disabled={uiAuthLoading || !uiPasswordEntry.trim()}>
+              {uiAuthLoading ? 'Unlocking…' : 'Unlock'}
+            </button>
+          </div>
+          {uiAuthError ? <p className="api-state">{uiAuthError}</p> : null}
+        </section>
+      </main>
+    )
+  }
+
   return (
     <main className="app">
       <header className="topbar">
@@ -1146,7 +1528,14 @@ export default function App() {
           <h1>Kiln UI v2</h1>
           <p>{demoMode ? 'Demo telemetry dashboard' : 'Live telemetry dashboard'}</p>
         </div>
-        <div className={`pill ${streamState}`}>Stream: {streamState}</div>
+        <div className="controls-row">
+          {uiAuthEnabled ? (
+            <button type="button" onClick={() => void lockUi()}>
+              Lock UI
+            </button>
+          ) : null}
+          <div className={`pill ${streamState}`}>Stream: {streamState}</div>
+        </div>
       </header>
 
       {hasFault ? (
@@ -1154,6 +1543,13 @@ export default function App() {
           {streamState === 'stale' ? 'Telemetry stream is stale. Control with caution.' : null}
           {streamState === 'stale' && sensorErr > 30 ? ' | ' : null}
           {sensorErr > 30 ? `Sensor error rate elevated: ${sensorErr.toFixed(1)}%` : null}
+        </section>
+      ) : null}
+
+      {kilnState === 'IDLE' && statusReasonText ? (
+        <section className={`outcome-banner ${statusReasonKind || 'info'}`}>
+          <strong>{formatOutcomeKind(statusReasonKind)}</strong>
+          <span>{statusReasonText}</span>
         </section>
       ) : null}
 
@@ -1192,32 +1588,32 @@ export default function App() {
           <p className="big">{round(status.pidstats?.setpoint ?? status.target, 1)}</p>
         </article>
         <article className="card">
-          <h3>Error Avg 5m</h3>
-          <p className="big">{round(stats.error5m, 2)}</p>
+          <h3>Error Avg {recentWindowLabel}</h3>
+          <p className="big">{round(stats.errorWindow, 2)}</p>
         </article>
         <article className="card">
-          <h3>MAE 5m</h3>
-          <p className="big">{round(stats.mae5m, 2)}</p>
+          <h3>MAE {recentWindowLabel}</h3>
+          <p className="big">{round(stats.maeWindow, 2)}</p>
         </article>
         <article className="card">
-          <h3>Within ±5° (5m)</h3>
-          <p className="big">{pct(stats.within5m)}</p>
+          <h3>Within ±5° ({recentWindowLabel})</h3>
+          <p className="big">{pct(stats.withinWindow)}</p>
         </article>
         <article className="card">
           <h3>Within ±5° (run)</h3>
           <p className="big">{pct(stats.withinRun)}</p>
         </article>
         <article className="card">
-          <h3>Switches 5m</h3>
-          <p className="big">{round(stats.switches5m, 0)}</p>
+          <h3>Switches {recentWindowLabel}</h3>
+          <p className="big">{round(stats.switchesWindow, 0)}</p>
         </article>
         <article className="card">
           <h3>Switches/hr</h3>
           <p className="big">{round(stats.switchesHr, 1)}</p>
         </article>
         <article className="card">
-          <h3>Duty 5m</h3>
-          <p className="big">{pct(stats.duty5m)}</p>
+          <h3>Duty {recentWindowLabel}</h3>
+          <p className="big">{pct(stats.dutyWindow)}</p>
         </article>
         <article className="card">
           <h3>Overshoot Run</h3>
@@ -1305,7 +1701,12 @@ export default function App() {
       {activeTab === 'dashboard' ? (
       <section className="grid chart-grid">
         <article className="card chart-card">
-          <h3>Full Run Plot (Temp + Target)</h3>
+          <h3>Selected Firing Plan + Live Temperature</h3>
+          <p className="api-state">
+            {runPoints.length
+              ? 'The full firing plan stays visible in blue while measured kiln temperature overlays in orange during the run.'
+              : 'Pick a profile to preview the whole firing plan. Live temperature starts drawing here once the firing begins.'}
+          </p>
           <div className="chart-tools">
             <label htmlFor="chart-start-hour">Start (h)</label>
             <input
@@ -1466,7 +1867,24 @@ export default function App() {
         </article>
 
         <article className="card chart-card">
-          <h3>Error (Last 5 Minutes)</h3>
+          <div className="section-head">
+            <h3>Error History</h3>
+            <div className="chart-tools compact">
+              <label htmlFor="recent-window">Window</label>
+              <select
+                id="recent-window"
+                value={recentWindowSeconds}
+                onChange={(e) => setRecentWindowSeconds(Number(e.target.value) || DEFAULT_RECENT_WINDOW_SECONDS)}
+              >
+                {RECENT_WINDOW_OPTIONS.map((option) => (
+                  <option key={option.seconds} value={option.seconds}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          <p className="api-state">Rolling error view across the last {recentWindowLabel} of telemetry kept in this browser session.</p>
           <svg viewBox="0 0 560 140" className="chart-svg" aria-label="Error chart">
             <line x1="0" y1="70" x2="560" y2="70" className="zero-line" />
             <polyline points={errorPoints} className="error-line" fill="none" />
@@ -1474,7 +1892,8 @@ export default function App() {
         </article>
 
         <article className="card chart-card">
-          <h3>Relay On/Off (Last 5 Minutes)</h3>
+          <h3>Relay On/Off ({recentWindowLabel})</h3>
+          <p className="api-state">Same adjustable window, focused on relay activity so switch density is easier to inspect.</p>
           <svg viewBox="0 0 560 100" className="chart-svg" aria-label="Switch chart">
             <polyline points={switchPoints} className="switch-line" fill="none" />
           </svg>
@@ -1487,14 +1906,16 @@ export default function App() {
         <h3>Run Summary</h3>
         {runSummary ? (
           <div className="summary-grid">
-            <div><strong>Completed</strong><span>{new Date(runSummary.completedAt).toLocaleString()}</span></div>
-            <div><strong>Profile</strong><span>{runSummary.profile}</span></div>
-            <div><strong>Duration</strong><span>{runSummary.durationHours.toFixed(2)} h</span></div>
-            <div><strong>Max Temp</strong><span>{runSummary.maxTemp.toFixed(1)}</span></div>
-            <div><strong>Max Overshoot</strong><span>{runSummary.maxOvershoot.toFixed(1)}</span></div>
-            <div><strong>Within ±5°</strong><span>{runSummary.within5Run.toFixed(1)}%</span></div>
-            <div><strong>Switches/hr</strong><span>{runSummary.switchesPerHour.toFixed(1)}</span></div>
-            <div><strong>Cost</strong><span>{runSummary.cost.toFixed(2)}</span></div>
+            <div><strong>Finished</strong><span>{runSummary.ended_at ? new Date(runSummary.ended_at).toLocaleString() : '--'}</span></div>
+            <div><strong>Outcome</strong><span>{formatOutcomeKind(runSummary.reason_kind)}</span></div>
+            <div><strong>Why</strong><span>{runSummary.reason_text ?? runSummary.reason ?? '--'}</span></div>
+            <div><strong>Profile</strong><span>{runSummary.profile ?? '--'}</span></div>
+            <div><strong>Duration</strong><span>{runSummary.runtime_hours != null ? `${runSummary.runtime_hours.toFixed(2)} h` : '--'}</span></div>
+            <div><strong>Max Temp</strong><span>{runSummary.max_temp != null ? runSummary.max_temp.toFixed(1) : '--'}</span></div>
+            <div><strong>Max Overshoot</strong><span>{runSummary.overshoot_max != null ? runSummary.overshoot_max.toFixed(1) : '--'}</span></div>
+            <div><strong>Within ±5°</strong><span>{runSummary.within_5deg_pct != null ? `${runSummary.within_5deg_pct.toFixed(1)}%` : '--'}</span></div>
+            <div><strong>Switches/hr</strong><span>{runSummary.switches_per_hour != null ? runSummary.switches_per_hour.toFixed(1) : '--'}</span></div>
+            <div><strong>Cost</strong><span>{runSummary.cost != null ? runSummary.cost.toFixed(2) : '--'}</span></div>
           </div>
         ) : (
           <p className="api-state">No completed run summary yet.</p>
@@ -1581,7 +2002,7 @@ export default function App() {
                   </td>
                   <td>{row.ended_at ? new Date(row.ended_at).toLocaleString() : '--'}</td>
                   <td>{row.profile ?? '--'}</td>
-                  <td>{row.reason ?? '--'}</td>
+                  <td>{row.reason_text ?? row.reason ?? '--'}</td>
                   <td>{row.max_temp_gap_to_peak_target?.toFixed(1) ?? '--'}</td>
                   <td>{row.high_temp_duty_pct?.toFixed(1) ?? '--'}%</td>
                   <td>{row.within_5deg_pct?.toFixed(1) ?? '--'}%</td>
@@ -1599,31 +2020,56 @@ export default function App() {
 
       {activeTab === 'dashboard' ? (
       <section className="card profile-card">
-        <h3>Profile Preview</h3>
+        <h3>Selected Plan Details</h3>
         {activeProfile ? (
-          <div className="profile-table-wrap">
-            <table className="profile-table">
-              <thead>
-                <tr>
-                  <th>#</th>
-                  <th>Time (s)</th>
-                  <th>Target</th>
-                </tr>
-              </thead>
-              <tbody>
-                {activeProfile.data.slice(0, 18).map((point, idx) => (
-                  <tr key={`${activeProfile.name}-${idx}`}>
-                    <td>{idx + 1}</td>
-                    <td>{Math.round(point[0])}</td>
-                    <td>{Math.round(point[1])}</td>
+          <>
+            {profileSummary ? (
+              <div className="summary-grid summary-grid-tight">
+                <div><strong>Profile</strong><span>{activeProfile.name}</span></div>
+                <div><strong>Total Duration</strong><span>{formatDuration(profileSummary.endSeconds)}</span></div>
+                <div><strong>Points</strong><span>{profileSummary.points}</span></div>
+                <div><strong>Peak Target</strong><span>{round(profileSummary.peakTarget, 0)}</span></div>
+              </div>
+            ) : null}
+            <div className="profile-table-wrap">
+              <table className="profile-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Time (s)</th>
+                    <th>Target</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {activeProfile.data.map((point, idx) => (
+                    <tr key={`${activeProfile.name}-${idx}`}>
+                      <td>{idx + 1}</td>
+                      <td>{Math.round(point[0])}</td>
+                      <td>{Math.round(point[1])}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         ) : (
           <p className="api-state">No profile selected</p>
         )}
+      </section>
+      ) : null}
+
+      {activeTab === 'dashboard' ? (
+      <section className="card config-card">
+        <h3>Hardware & GPIO</h3>
+        <p className="api-state">Read-only kiln hardware configuration pulled from the controller so you can inspect wiring-related settings without using the console.</p>
+        <div className="summary-grid config-grid">
+          {hardwareRows.map((row) => (
+            <div key={row.label}>
+              <strong>{row.label}</strong>
+              <span>{row.value}</span>
+            </div>
+          ))}
+        </div>
       </section>
       ) : null}
 

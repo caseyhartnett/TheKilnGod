@@ -30,6 +30,8 @@ FIRING_RECORD_COLUMNS = [
     "profile",
     "state",
     "reason",
+    "reason_text",
+    "reason_kind",
     "runtime_s",
     "total_s",
     "time_left_s",
@@ -207,6 +209,8 @@ class FiringRecordWriter:
                         "run_id": summary.get("run_id"),
                         "profile": summary.get("profile"),
                         "reason": reason,
+                        "reason_text": summary.get("reason_text"),
+                        "reason_kind": summary.get("reason_kind"),
                         "runtime_s": summary.get("runtime_seconds"),
                         "total_s": summary.get("runtime_seconds"),
                         "time_left_s": 0,
@@ -244,6 +248,7 @@ class FiringRecordWriter:
             self._close_unlocked()
 
     def _write_row_unlocked(self, row: dict[str, Any]) -> None:
+        """Write one normalized row to the open CSV handle."""
         if not self._writer:
             return
         normalized = dict.fromkeys(FIRING_RECORD_COLUMNS, "")
@@ -261,6 +266,7 @@ class FiringRecordWriter:
             self._file.flush()
 
     def _close_unlocked(self) -> None:
+        """Close the active CSV handle without acquiring the outer lock."""
         if self._file:
             with suppress(Exception):
                 self._file.close()

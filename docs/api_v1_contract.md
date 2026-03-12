@@ -6,6 +6,47 @@ Base URL examples assume default port `8081`.
 
 ## HTTP Endpoints
 
+## `GET /ui-auth/status`
+
+Returns the current lightweight `ui-v2` password-gate state.
+
+Example response:
+
+```json
+{
+  "success": true,
+  "enabled": true,
+  "unlocked": false
+}
+```
+
+Notes:
+
+- `enabled` depends on whether `KILN_UI_PASSWORD` is set in the server environment.
+- `unlocked` is tracked with a browser-session cookie.
+
+## `POST /ui-auth/unlock`
+
+Unlock the `ui-v2` session when `KILN_UI_PASSWORD` is enabled.
+
+Body:
+
+```json
+{
+  "password": "your_ui_password"
+}
+```
+
+Responses:
+
+- success: `200`
+- incorrect password: `401`
+- invalid body: `400`
+
+## `POST /ui-auth/lock`
+
+Clears the current `ui-v2` unlock session cookie.
+
 ## `GET /api/stats`
 
 Returns current PID stats and telemetry.
@@ -82,7 +123,14 @@ Common request/response:
 
 - Request body: JSON object with `cmd`
 - Success response: `{ "success": true }`
-- Error response for missing profile on run: `{ "success": false, "error": "..." }`
+- Validation/auth error response: `{ "success": false, "error": "..." }`
+
+Validation behavior:
+
+- Missing or non-object JSON body: `400`
+- Missing `cmd`: `400`
+- Unknown `cmd`: `400`
+- Unauthorized request: `401`
 
 ### Optional monitor/control auth
 
@@ -245,6 +293,8 @@ Also sends a backlog envelope for new observers:
 
 Auth role: monitor.
 
+Plain HTTP requests to websocket-only endpoints return `400`.
+
 ## Runtime Issue Events
 
 `issue_detected` notifications may include:
@@ -260,8 +310,14 @@ Profile management channel.
 
 - Send `"GET"` string to retrieve all profiles.
 - Send JSON command object for mutation:
-  - `{ "cmd": "PUT", "profile": { ... } }`
+  - `{ "cmd": "PUT", "profile": { ... }, "force": false }`
   - `{ "cmd": "DELETE", "profile": { ... } }`
+
+Mutation notes:
+
+- Profile names are validated server-side and must stay within the configured profile directory.
+- `PUT` returns `resp: "FAIL"` with `error: "Profile exists"` when a profile already exists and `force` is not true.
+- On successful `PUT`, the server sends the command response followed by the refreshed profile list.
 
 Auth role:
 
@@ -290,4 +346,5 @@ Auth role: monitor.
 - New telemetry fields are additive and backward-compatible.
 - Existing command semantics are preserved.
 - If auth tokens are enabled, legacy UI pages do not automatically send them.
+- `ui-v2` stores saved tokens in browser `sessionStorage` by default.
 - Command/storage actions are audit-logged as JSON lines when `command_audit_enabled` is true.

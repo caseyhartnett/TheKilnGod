@@ -110,7 +110,10 @@ def main() -> int:
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
                 current_txt = "--" if current is None else f"{float(current):.3f}A"
                 power_txt = "--" if power is None else f"{float(power):.1f}W"
-                print(f"{ts} {name:4} heat={'ON ' if heat_enabled else 'OFF'} current={current_txt:>8} power={power_txt:>8}")
+                print(
+                    f"{ts} {name:4} heat={'ON ' if heat_enabled else 'OFF'} "
+                    f"current={current_txt:>8} power={power_txt:>8}"
+                )
                 time.sleep(max(0.1, float(args.sample_seconds)))
     finally:
         heater.value = off

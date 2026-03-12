@@ -17,7 +17,7 @@ Modernize the `TheKilnGod` project structure and conventions using best practice
 
 ## 3. Move to modern Python package layout
 - Create a `src/thekilngod/` package directory and move Python application code there (e.g., `lib/` modules like `oven.py`, `buzzer.py`, `telemetry_math.py`).
-- Keep the root directory focused: `pyproject.toml`, `README.md`, lock/dependency files (`requirements.txt`), `docs/`, `tests/`, `ui-v2/`, `public/`, and `scripts/`.
+- Keep the root directory focused: `pyproject.toml`, `README.md`, `docs/`, `tests/`, `ui-v2/`, `public/`, and `scripts/`.
 - Separate runtime application modules from operational/debug scripts (e.g., `scripts/test_thermocouple.py`, `scripts/gpio_readall.py`, `src/thekilngod/display_updater.py`).
 
 ## 4. Standardize entry points without behavior changes

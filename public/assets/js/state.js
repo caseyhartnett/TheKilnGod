@@ -86,6 +86,39 @@ function setText(id, value) {
   }
 }
 
+function statusReasonText(x) {
+  if (x && x.status_reason_text) {
+    return x.status_reason_text;
+  }
+  if (x && x.last_run_summary && x.last_run_summary.reason_text) {
+    return x.last_run_summary.reason_text;
+  }
+  return "--";
+}
+
+function statusReasonKind(x) {
+  if (x && x.status_reason_kind) {
+    return x.status_reason_kind;
+  }
+  if (x && x.last_run_summary && x.last_run_summary.reason_kind) {
+    return x.last_run_summary.reason_kind;
+  }
+  return "info";
+}
+
+function formatReasonLabel(kind) {
+  if (kind === "complete") {
+    return "completed";
+  }
+  if (kind === "error") {
+    return "error";
+  }
+  if (kind === "stopped") {
+    return "stopped";
+  }
+  return "status";
+}
+
 function rnd(number) {
   if (!isFinite(number)) {
     return "0.00";
@@ -206,6 +239,9 @@ function overshoot_run(data) {
 }
 
 function update_stats(x) {
+  setText("run-state", x.state || "--");
+  setText("run-reason", formatReasonLabel(statusReasonKind(x)) + ": " + statusReasonText(x));
+
   if (!x.pidstats) {
     return;
   }

@@ -24,9 +24,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REFERENCE_PROFILES = REPO_ROOT / "storage" / "profiles"
 CONE_NAME_RE = re.compile(r"^cone-([0-9]+)(?:$|[-_])", re.IGNORECASE)
-DAEMON_LOG_RE = re.compile(
-    r"temp=(?P<temp>-?\d+(?:\.\d+)?).*run_time=(?P<runtime>-?\d+(?:\.\d+)?)"
-)
+DAEMON_LOG_RE = re.compile(r"temp=(?P<temp>-?\d+(?:\.\d+)?).*run_time=(?P<runtime>-?\d+(?:\.\d+)?)")
 
 
 @dataclass(frozen=True)
@@ -405,10 +403,7 @@ def build_cone_references(
         grouped.setdefault(cone_numeric, []).append(heatwork_seconds)
 
     if len(grouped) < 2:
-        msg = (
-            "Need at least two cone references. "
-            f"Found {len(grouped)} in {profiles_dir}."
-        )
+        msg = f"Need at least two cone references. Found {len(grouped)} in {profiles_dir}."
         raise ValueError(msg)
 
     references: list[ConeReference] = []
@@ -524,11 +519,7 @@ def print_result(
     print(f"\n{heading}")
     if extra_line:
         print(extra_line)
-    print(
-        "points="
-        f"{len(samples)} duration_h={duration_seconds / 3600.0:.2f} "
-        f"peak_f={peak_f:.1f}"
-    )
+    print(f"points={len(samples)} duration_h={duration_seconds / 3600.0:.2f} peak_f={peak_f:.1f}")
     print(
         f"heatwork_eq_seconds_at_{reference_temp_f:.1f}F={heatwork_seconds:.3f} "
         f"(eq_minutes={heatwork_seconds / 60.0:.3f})"
@@ -649,9 +640,7 @@ def analyze_log(
 def build_parser() -> argparse.ArgumentParser:
     """Create CLI parser for firing analyzer script."""
     parser = argparse.ArgumentParser(
-        description=(
-            "Estimate kiln cone-equivalent heatwork from a profile plan and/or run log."
-        )
+        description=("Estimate kiln cone-equivalent heatwork from a profile plan and/or run log.")
     )
     parser.add_argument(
         "--profile",

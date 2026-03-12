@@ -73,6 +73,58 @@ function formatDisplayTemp(value) {
     return parseInt(value, 10) + '°' + temp_scale_display;
 }
 
+function runReasonText(x) {
+    if (x && x.status_reason_text) {
+        return x.status_reason_text;
+    }
+    if (x && x.last_run_summary && x.last_run_summary.reason_text) {
+        return x.last_run_summary.reason_text;
+    }
+    return '';
+}
+
+function runReasonKind(x) {
+    if (x && x.status_reason_kind) {
+        return x.status_reason_kind;
+    }
+    if (x && x.last_run_summary && x.last_run_summary.reason_kind) {
+        return x.last_run_summary.reason_kind;
+    }
+    return 'info';
+}
+
+function runReasonLabel(kind) {
+    if (kind === 'complete') { return 'Completed'; }
+    if (kind === 'error') { return 'Error'; }
+    if (kind === 'stopped') { return 'Stopped'; }
+    return 'Status';
+}
+
+function updateRunReason(x) {
+    var text = runReasonText(x);
+    var kind = runReasonKind(x);
+    var box = $('#run_reason');
+    if (!text) {
+        box.hide();
+        $('#run_reason_text').html('');
+        return;
+    }
+
+    box.removeClass('alert-info alert-success alert-warning alert-danger');
+    if (kind === 'complete') {
+        box.addClass('alert-success');
+    } else if (kind === 'error') {
+        box.addClass('alert-danger');
+    } else if (kind === 'stopped') {
+        box.addClass('alert-warning');
+    } else {
+        box.addClass('alert-info');
+    }
+
+    $('#run_reason_text').html('<strong>' + runReasonLabel(kind) + ':</strong> ' + text);
+    box.show();
+}
+
 function updateSelectedProfilePreview(profile, runtimeText)
 {
     if (!profile) {
@@ -672,9 +724,9 @@ $(document).ready(function()
 			console.log(state);
                         $('#target_temp').html('---');
                         updateProgress(0);
-                        $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> <b>Run completed</b>", {
+                        $.bootstrapGrowl("<span class=\"glyphicon glyphicon-exclamation-sign\"></span> <b>" + runReasonLabel(runReasonKind(x)) + ":</b><br/>" + (runReasonText(x) || "Run finished"), {
                         ele: 'body', // which element to append to
-                        type: 'success', // (null, 'info', 'error', 'success')
+                        type: runReasonKind(x) === 'error' ? 'error' : (runReasonKind(x) === 'stopped' ? 'info' : 'success'), // (null, 'info', 'error', 'success')
                         offset: {from: 'top', amount: 250}, // 'top', or 'bottom'
                         align: 'center', // ('left', 'right', or 'center')
                         width: 385, // (integer, or 'auto')
@@ -710,6 +762,8 @@ $(document).ready(function()
                     $("#nav_stop").hide();
                     $('#state').html('<p class="ds-text">'+state+'</p>');
                 }
+
+                updateRunReason(x);
 
                 $('#act_temp').html(parseInt(x.temperature));
                 heat_rate = parseInt(x.heat_rate)

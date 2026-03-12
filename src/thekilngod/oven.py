@@ -57,6 +57,99 @@ class Duplogger:
 duplog = Duplogger().logref()
 
 
+def _format_temp_with_scale(value: float | None) -> str | None:
+    """Return a compact temperature string such as `2232F`."""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    scale = str(getattr(config, "temp_scale", "f")).upper()
+    return f"{numeric:.0f}{scale}"
+
+
+def describe_run_reason(
+    reason: str | None,
+    *,
+    temperature: float | None = None,
+    temp_limit: float | None = None,
+    sensor_error_pct: float | None = None,
+    sensor_error_limit_pct: float | None = None,
+) -> dict[str, str]:
+    """Translate a raw stop reason into a concise UI-ready summary."""
+    raw_reason = str(reason or "unknown").strip() or "unknown"
+    reason_key = raw_reason.lower()
+    temp_text = _format_temp_with_scale(temperature)
+    limit_text = _format_temp_with_scale(temp_limit)
+
+    if reason_key == "schedule_complete":
+        return {
+            "reason": raw_reason,
+            "reason_kind": "complete",
+            "reason_text": "Reached the end of the firing plan",
+        }
+
+    if reason_key in {"manual_stop", "manual_stop_http"}:
+        return {
+            "reason": raw_reason,
+            "reason_kind": "stopped",
+            "reason_text": "Stopped manually from the UI or API",
+        }
+
+    if reason_key == "manual_stop_ws":
+        return {
+            "reason": raw_reason,
+            "reason_kind": "stopped",
+            "reason_text": "Stopped manually from the legacy UI",
+        }
+
+    if reason_key == "emergency_temp_too_high":
+        text = "Emergency stop: measured temperature exceeded the safety limit"
+        if temp_text and limit_text:
+            text = f"Emergency stop: {temp_text} exceeded limit {limit_text}"
+        return {
+            "reason": raw_reason,
+            "reason_kind": "error",
+            "reason_text": text,
+        }
+
+    if reason_key == "emergency_tc_error_rate":
+        text = "Emergency stop: thermocouple error rate exceeded the safety limit"
+        if sensor_error_pct is not None and sensor_error_limit_pct is not None:
+            text = (
+                "Emergency stop: thermocouple errors "
+                f"{float(sensor_error_pct):.0f}% exceeded {float(sensor_error_limit_pct):.0f}%"
+            )
+        return {
+            "reason": raw_reason,
+            "reason_kind": "error",
+            "reason_text": text,
+        }
+
+    if reason_key.startswith("emergency"):
+        return {
+            "reason": raw_reason,
+            "reason_kind": "error",
+            "reason_text": raw_reason.replace("_", " ").capitalize(),
+        }
+
+    if "abort" in reason_key or "stop" in reason_key:
+        return {
+            "reason": raw_reason,
+            "reason_kind": "stopped",
+            "reason_text": raw_reason.replace("_", " ").capitalize(),
+        }
+
+    return {
+        "reason": raw_reason,
+        "reason_kind": "info",
+        "reason_text": raw_reason.replace("_", " ").capitalize(),
+    }
+
+
 def decide_catchup_shadow_state(
     avg_error_confidence: float,
     rise_rate_trend: float,
@@ -80,10 +173,10 @@ def decide_catchup_shadow_state(
         >= float(getattr(config, "catchup_supervisor_cusum_alarm_deg_seconds", 60000.0))
     ):
         return "would_abort"
-    if (
-        avg_error_confidence > float(getattr(config, "catchup_supervisor_error_threshold", 50.0))
-        and rise_rate_trend
-        >= float(getattr(config, "catchup_supervisor_min_rise_rate_deg_per_hour", 20.0))
+    if avg_error_confidence > float(
+        getattr(config, "catchup_supervisor_error_threshold", 50.0)
+    ) and rise_rate_trend >= float(
+        getattr(config, "catchup_supervisor_min_rise_rate_deg_per_hour", 20.0)
     ):
         return "would_extend"
     return "normal"
@@ -417,6 +510,7 @@ class Max31856_Error(ThermocoupleError):
             "tc_low": "thermocouple temp too low",
             "voltage": "voltage too high or low",
             "open_tc": "not connected",
+            "communication_failure": "SPI communication failure (all zeros received)",
         }
         super().__init__(message)
 
@@ -444,6 +538,15 @@ class Max31856(TempSensorReal):
         # dict for errors and raise an exception.
         # and raise Max31856_Error(message)
         temp = self.thermocouple.temperature
+
+        # Check for communication failure (all zeros received over SPI)
+        # This manifests as both board temp and probe temp being exactly 0.0C (32.00F)
+        # with no faults flagged by the chip hardware.
+        ref_temp = self.thermocouple.reference_temperature
+        if temp == 0.0 and ref_temp == 0.0:
+            if not any(self.thermocouple.fault.values()):
+                raise Max31856_Error("communication_failure")
+
         for k, v in self.thermocouple.fault.items():
             if v:
                 raise Max31856_Error(k)
@@ -549,8 +652,17 @@ class Oven(threading.Thread):
             log.debug("power sensor snapshot failed: %s", exc)
             return NullPowerSensor(reason="read error").snapshot()
 
+    @staticmethod
+    def _scale_power_value(value: Any) -> float | None:
+        """Scale current, power, and energy readings using configured factor."""
+        if value is None:
+            return None
+        scale = float(getattr(config, "power_sensor_scale_factor", 1.0))
+        return float(value) * scale
+
     def _record_telemetry_sample(self, temp: float) -> None:
-        # Record telemetry only once per control-cycle-ish runtime progression
+        """Capture one telemetry sample per control-cycle-sized runtime increment."""
+        # Record telemetry only once per control-cycle-sized runtime progression.
         if self.state not in ("RUNNING", "PAUSED"):
             return
         if self.telemetry_last_sample_runtime is not None:
@@ -569,14 +681,9 @@ class Oven(threading.Thread):
         raw_line_current = power.get("current")
         raw_line_power = power.get("power")
         raw_line_energy_wh = power.get("energy_wh")
-        scale = float(getattr(config, "power_sensor_scale_factor", 1.0))
-        line_current = (
-            float(raw_line_current) * scale if raw_line_current is not None else None
-        )
-        line_power = float(raw_line_power) * scale if raw_line_power is not None else None
-        line_energy_wh = (
-            float(raw_line_energy_wh) * scale if raw_line_energy_wh is not None else None
-        )
+        line_current = self._scale_power_value(raw_line_current)
+        line_power = self._scale_power_value(raw_line_power)
+        line_energy_wh = self._scale_power_value(raw_line_energy_wh)
         power_sensor_stale = bool(power.get("stale", True))
         power_sensor_error_pct = float(power.get("error_rate_pct", 100.0))
 
@@ -630,9 +737,7 @@ class Oven(threading.Thread):
         mismatch_min_error = float(getattr(config, "power_sensor_mismatch_min_error", 15.0))
         current_threshold = float(getattr(config, "power_sensor_current_threshold_amps", 0.25))
         mismatch_window = float(getattr(config, "power_sensor_no_current_window_seconds", 30.0))
-        mismatch_cooldown = float(
-            getattr(config, "power_sensor_mismatch_cooldown_seconds", 300.0)
-        )
+        mismatch_cooldown = float(getattr(config, "power_sensor_mismatch_cooldown_seconds", 300.0))
         stale_alert_seconds = float(getattr(config, "power_sensor_stale_alert_seconds", 30.0))
         if prev_runtime > 0 and heat_on and (self.target - temp) >= mismatch_min_error:
             if line_current is not None and float(line_current) <= current_threshold:
@@ -715,6 +820,7 @@ class Oven(threading.Thread):
         self._check_runtime_alerts(now, temp, error)
 
     def _persist_power_telemetry_sample(self, now: float, sample: dict[str, Any]) -> None:
+        """Append one power-telemetry JSONL row when logging is enabled."""
         if not bool(getattr(config, "power_telemetry_log_enabled", False)):
             return
         interval = float(getattr(config, "power_telemetry_log_interval_seconds", 2.0))
@@ -856,17 +962,23 @@ class Oven(threading.Thread):
         transient_drop_threshold = float(
             getattr(config, "catchup_supervisor_transient_drop_threshold", 20.0)
         )
-        transient_holdoff = float(getattr(config, "catchup_supervisor_transient_holdoff_seconds", 900.0))
+        transient_holdoff = float(
+            getattr(config, "catchup_supervisor_transient_holdoff_seconds", 900.0)
+        )
         transient_samples = self._samples_since(recent, now, transient_drop_window)
         if len(transient_samples) >= 2:
-            drop = float(transient_samples[-1]["temperature"]) - float(transient_samples[0]["temperature"])
+            drop = float(transient_samples[-1]["temperature"]) - float(
+                transient_samples[0]["temperature"]
+            )
             if drop <= -abs(transient_drop_threshold) and error > float(config.pid_control_window):
                 self.catchup_shadow_holdoff_until_runtime = max(
                     self.catchup_shadow_holdoff_until_runtime,
                     self.runtime + transient_holdoff,
                 )
 
-        self.catchup_shadow_holdoff_active = self.runtime < self.catchup_shadow_holdoff_until_runtime
+        self.catchup_shadow_holdoff_active = (
+            self.runtime < self.catchup_shadow_holdoff_until_runtime
+        )
 
         lag_threshold = float(getattr(config, "catchup_supervisor_error_threshold", 50.0))
         if avg_error_confidence >= lag_threshold:
@@ -884,7 +996,8 @@ class Oven(threading.Thread):
         if residual <= 0:
             self.catchup_shadow_cusum_deg_seconds = max(
                 0.0,
-                self.catchup_shadow_cusum_deg_seconds - (cusum_decay_rate * max(0.0, runtime_delta)),
+                self.catchup_shadow_cusum_deg_seconds
+                - (cusum_decay_rate * max(0.0, runtime_delta)),
             )
 
         decision = decide_catchup_shadow_state(
@@ -1099,13 +1212,23 @@ class Oven(threading.Thread):
         heat = [sample["heat_on"] for sample in recent]
         within = [sample["within_5deg"] for sample in recent]
         sensor_errors = [sample["sensor_error_percent"] for sample in recent]
-        line_voltages = [sample["line_voltage"] for sample in recent if sample["line_voltage"] is not None]
-        line_currents = [sample["line_current"] for sample in recent if sample["line_current"] is not None]
-        line_powers = [sample["line_power"] for sample in recent if sample["line_power"] is not None]
+        line_voltages = [
+            sample["line_voltage"] for sample in recent if sample["line_voltage"] is not None
+        ]
+        line_currents = [
+            sample["line_current"] for sample in recent if sample["line_current"] is not None
+        ]
+        line_powers = [
+            sample["line_power"] for sample in recent if sample["line_power"] is not None
+        ]
         power_sensor_stale = [sample["power_sensor_stale"] for sample in recent]
         power_sensor_errors = [sample["power_sensor_error_percent"] for sample in recent]
         latest_line_energy = next(
-            (sample["line_energy_wh"] for sample in reversed(recent) if sample["line_energy_wh"] is not None),
+            (
+                sample["line_energy_wh"]
+                for sample in reversed(recent)
+                if sample["line_energy_wh"] is not None
+            ),
             self.telemetry_run_line_energy_wh_last,
         )
 
@@ -1129,11 +1252,15 @@ class Oven(threading.Thread):
             else 0.0
         )
         no_current_pct_run = (
-            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds) * 100
+            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds)
+            * 100
             if self.telemetry_run_heat_on_seconds > 0
             else 0.0
         )
         power = self._get_power_snapshot()
+        line_current_now = self._scale_power_value(power.get("current"))
+        line_power_now = self._scale_power_value(power.get("power"))
+        line_energy_wh_now = self._scale_power_value(power.get("energy_wh"))
 
         return {
             "window_seconds": self.telemetry_window_seconds,
@@ -1154,20 +1281,16 @@ class Oven(threading.Thread):
             "power_sensor_stale_5m": bool_pct(power_sensor_stale),
             "power_sensor_error_rate_5m": avg(power_sensor_errors),
             "line_voltage_now": power.get("voltage"),
-            "line_current_now": power.get("current"),
-            "line_power_now": power.get("power"),
-            "line_energy_wh_now": power.get("energy_wh"),
+            "line_current_now": line_current_now,
+            "line_power_now": line_power_now,
+            "line_energy_wh_now": line_energy_wh_now,
             "line_voltage_avg_5m": avg(line_voltages),
             "line_current_avg_5m": avg(line_currents),
             "line_power_avg_5m": avg(line_powers),
             "line_energy_wh_last_5m": latest_line_energy,
             "no_current_when_heating_pct_run": no_current_pct_run,
-            "catchup_supervisor_enabled": bool(
-                getattr(config, "catchup_supervisor_enabled", True)
-            ),
-            "catchup_supervisor_mode": str(
-                getattr(config, "catchup_supervisor_mode", "shadow")
-            ),
+            "catchup_supervisor_enabled": bool(getattr(config, "catchup_supervisor_enabled", True)),
+            "catchup_supervisor_mode": str(getattr(config, "catchup_supervisor_mode", "shadow")),
             "catchup_shadow_state": self.catchup_shadow_state,
             "catchup_shadow_avg_error_confidence": self.catchup_shadow_avg_error_confidence,
             "catchup_shadow_rise_rate_trend_deg_per_hour": self.catchup_shadow_rise_rate_trend,
@@ -1188,13 +1311,12 @@ class Oven(threading.Thread):
         return startat
 
     def set_heat_rate(self, runtime: float, temp: float) -> None:
-        """heat rate is the heating rate in degrees/hour"""
-        # arbitrary number of samples
-        # the time this covers changes based on a few things
+        """Estimate heating rate in degrees per hour from recent samples."""
+        # Keep a fixed-size rolling sample window; the covered time span varies.
         numtemps = 60
         self.heat_rate_temps.append((runtime, temp))
 
-        # drop old temps off the list
+        # Drop the oldest samples when the rolling window grows too large.
         if len(self.heat_rate_temps) > numtemps:
             self.heat_rate_temps = self.heat_rate_temps[-1 * numtemps :]
         time2 = self.heat_rate_temps[-1][0]
@@ -1205,18 +1327,19 @@ class Oven(threading.Thread):
             self.heat_rate = ((temp2 - temp1) / (time2 - time1)) * 3600
 
     def run_profile(self, profile: Profile, startat: float = 0, allow_seek: bool = True) -> None:
+        """Start executing a profile, optionally resuming at a minute offset."""
         log.debug("run_profile run on thread" + threading.current_thread().name)
 
-        # Play start sound
+        # Play the start sound without blocking the control path.
         if self.buzzer:
-            # Run in separate thread to not block
             threading.Thread(target=self.buzzer.start_firing).start()
 
         runtime = startat * 60
         if allow_seek:
             if self.state == "IDLE":
                 if config.seek_start:
-                    temp = self.board.temp_sensor.temperature()  # Defined in a subclass
+                    # Temperature access is implemented by the concrete board sensor.
+                    temp = self.board.temp_sensor.temperature()
                     runtime += self.get_start_from_temperature(profile, temp)
 
         self.firing_record.close()
@@ -1233,6 +1356,7 @@ class Oven(threading.Thread):
         self.next_profile_checkpoint_index = None
         self.next_temp_milestone = None
         self.current_run_summary = None
+        self.last_run_summary = None
         self.state = "RUNNING"
         log.info("Running schedule %s starting at %d minutes" % (profile.name, startat))
         log.info("Starting")
@@ -1247,6 +1371,7 @@ class Oven(threading.Thread):
         self._start_firing_record(profile=profile, startat_seconds=self.startat)
 
     def _start_firing_record(self, profile: Profile, startat_seconds: float) -> None:
+        """Open the append-only firing record for the active run."""
         metadata = {
             "profile_data": profile.data,
             "temp_scale": getattr(config, "temp_scale", "f"),
@@ -1271,6 +1396,7 @@ class Oven(threading.Thread):
         )
 
     def _sensor_error_percent(self) -> float:
+        """Return the current thermocouple error percentage."""
         try:
             return float(self.board.temp_sensor.status.error_percent())
         except Exception:
@@ -1337,6 +1463,13 @@ class Oven(threading.Thread):
         )
 
     def get_run_health_summary(self, reason: str) -> dict[str, Any]:
+        reason_info = describe_run_reason(
+            reason,
+            temperature=self.temperature,
+            temp_limit=float(getattr(config, "emergency_shutoff_temp", 0)),
+            sensor_error_pct=self._sensor_error_percent(),
+            sensor_error_limit_pct=float(getattr(self.board.temp_sensor.status, "limit", 0)),
+        )
         runtime_hours = self.runtime / 3600 if self.runtime > 0 else 0.0
         switches_per_hour = (
             self.telemetry_run_switches / runtime_hours if runtime_hours > 0 else 0.0
@@ -1367,7 +1500,8 @@ class Oven(threading.Thread):
         )
         max_temp_gap_to_peak = peak_target - self.telemetry_run_max_temp if peak_target else 0.0
         no_current_pct = (
-            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds) * 100
+            (self.telemetry_run_no_current_heating_seconds / self.telemetry_run_heat_on_seconds)
+            * 100
             if self.telemetry_run_heat_on_seconds > 0
             else 0.0
         )
@@ -1387,6 +1521,8 @@ class Oven(threading.Thread):
             else None,
             "ended_at": datetime.datetime.utcnow().isoformat() + "Z",
             "reason": reason,
+            "reason_text": reason_info["reason_text"],
+            "reason_kind": reason_info["reason_kind"],
             "profile": self.profile.name if self.profile else None,
             "runtime_seconds": self.runtime,
             "runtime_hours": runtime_hours,
@@ -1470,20 +1606,20 @@ class Oven(threading.Thread):
         self.save_automatic_restart_state()
 
     def get_start_time(self) -> datetime.datetime:
+        """Return the virtual schedule start time for the current runtime."""
         return datetime.datetime.now() - datetime.timedelta(milliseconds=self.runtime * 1000)
 
     def kiln_must_catch_up(self) -> None:
-        """shift the whole schedule forward in time by one time_step
-        to wait for the kiln to catch up"""
+        """Pause schedule time progression until kiln temperature re-enters the control window."""
         if config.kiln_must_catch_up == True:
             temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
-            # kiln too cold, wait for it to heat up
+            # Shift schedule time when the kiln is still too cold.
             if self.target - temp > config.pid_control_window:
                 log.info("kiln must catch up, too cold, shifting schedule")
                 self.start_time = self.get_start_time()
                 self.catching_up = True
                 return
-            # kiln too hot, wait for it to cool down
+            # Shift schedule time when the kiln is still too hot.
             if temp - self.target > config.pid_control_window:
                 log.info("kiln must catch up, too hot, shifting schedule")
                 self.start_time = self.get_start_time()
@@ -1492,7 +1628,7 @@ class Oven(threading.Thread):
             self.catching_up = False
 
     def update_runtime(self) -> None:
-
+        """Recompute runtime from the stored schedule start time."""
         runtime_delta = datetime.datetime.now() - self.start_time
         if runtime_delta.total_seconds() < 0:
             runtime_delta = datetime.timedelta(0)
@@ -1500,10 +1636,11 @@ class Oven(threading.Thread):
         self.runtime = runtime_delta.total_seconds()
 
     def update_target_temp(self) -> None:
+        """Update the active target temperature from the current profile runtime."""
         self.target = self.profile.get_target_temperature(self.runtime)
 
     def reset_if_emergency(self) -> None:
-        """reset if the temperature is way TOO HOT, or other critical errors detected"""
+        """Abort the run when critical temperature or sensor faults are detected."""
         if (
             self.board.temp_sensor.temperature() + config.thermocouple_offset
             >= config.emergency_shutoff_temp
@@ -1550,12 +1687,14 @@ class Oven(threading.Thread):
                 self.abort_run(reason="emergency_tc_error_rate")
 
     def reset_if_schedule_ended(self) -> None:
+        """Finish the run when the schedule runtime has been exhausted."""
         if self.runtime > self.totaltime:
             log.info("schedule ended, shutting down")
             log.info("total cost = %s%.2f" % (config.currency_type, self.cost))
             self.abort_run(reason="schedule_complete")
 
     def update_cost(self) -> None:
+        """Accumulate run cost based on the current commanded heat output."""
         if self.heat:
             cost = (config.kwh_rate * config.kw_elements) * ((self.heat) / 3600)
         else:
@@ -1563,16 +1702,16 @@ class Oven(threading.Thread):
         self.cost = self.cost + cost
 
     def get_state(self) -> dict[str, Any]:
+        """Return the current oven state snapshot for APIs and websocket clients."""
         temp = 0
         try:
             temp = self.board.temp_sensor.temperature() + config.thermocouple_offset
         except AttributeError:
-            # this happens at start-up with a simulated oven
+            # Simulated boards can briefly lack a sensor during startup.
             temp = 0
             pass
         except Exception as e:
-            # Catch all other exceptions that might occur when reading temperature
-            # This prevents temp from staying at 0 when other errors occur
+            # Keep API state available even when a sensor read fails unexpectedly.
             log.error(f"Error reading temperature in get_state(): {e}")
             temp = 0
 
@@ -1596,19 +1735,24 @@ class Oven(threading.Thread):
             "catching_up": self.catching_up,
             "telemetry": self.get_telemetry(),
             "last_run_summary": self.last_run_summary,
+            "status_reason": self.last_run_summary.get("reason") if self.last_run_summary else None,
+            "status_reason_text": (
+                self.last_run_summary.get("reason_text") if self.last_run_summary else None
+            ),
+            "status_reason_kind": (
+                self.last_run_summary.get("reason_kind") if self.last_run_summary else None
+            ),
             "firing_record_file": self.current_firing_log_file,
         }
         return state
 
     def save_state(self) -> None:
+        """Write the current oven state snapshot to the restart-state file."""
         with open(config.automatic_restart_state_file, "w", encoding="utf-8") as f:
             json.dump(self.get_state(), f, ensure_ascii=False, indent=4)
 
     def state_file_is_old(self) -> bool:
-        """returns True is state files is older than 15 mins default
-        False if younger
-        True if state file cannot be opened or does not exist
-        """
+        """Return whether the automatic-restart state file is too old to trust."""
         if os.path.isfile(config.automatic_restart_state_file):
             state_age = os.path.getmtime(config.automatic_restart_state_file)
             now = time.time()
@@ -1618,13 +1762,13 @@ class Oven(threading.Thread):
         return True
 
     def save_automatic_restart_state(self) -> bool | None:
-        # only save state if the feature is enabled
+        """Persist automatic-restart state when the feature is enabled."""
         if not config.automatic_restarts == True:
             return False
         self.save_state()
 
     def should_i_automatic_restart(self) -> bool:
-        # only automatic restart if the feature is enabled
+        """Return whether the previous state should be used for an automatic restart."""
         if not config.automatic_restarts == True:
             return False
         if self.state_file_is_old():
@@ -1639,6 +1783,7 @@ class Oven(threading.Thread):
         return True
 
     def automatic_restart(self) -> None:
+        """Resume the last recorded run from the persisted restart-state file."""
         with open(config.automatic_restart_state_file) as infile:
             d = json.load(infile)
         startat = d["runtime"] / 60
@@ -1651,9 +1796,8 @@ class Oven(threading.Thread):
         with open(profile_path) as infile:
             profile_json = json.dumps(json.load(infile))
         profile = Profile(profile_json)
-        self.run_profile(
-            profile, startat=startat, allow_seek=False
-        )  # We don't want a seek on an auto restart.
+        # Automatic restart should resume from recorded runtime without seek-start.
+        self.run_profile(profile, startat=startat, allow_seek=False)
         self.cost = d["cost"]
         time.sleep(1)
         self.ovenwatcher.record(profile)

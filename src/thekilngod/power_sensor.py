@@ -6,6 +6,7 @@ import logging
 import threading
 import time
 from collections import deque
+from contextlib import suppress
 from typing import Any
 
 try:
@@ -44,6 +45,7 @@ class NullPowerSensor:
     """No-op power sensor used when the hardware reader is disabled or unavailable."""
 
     def __init__(self, reason: str = "disabled") -> None:
+        """Store the reason this placeholder sensor is unavailable."""
         self.reason = reason
 
     def start(self) -> None:
@@ -84,6 +86,7 @@ class Pzem004tPowerSensor(threading.Thread):
         timeout: float = 0.4,
         stale_seconds: float = 10.0,
     ) -> None:
+        """Initialize UART polling settings and in-memory sensor state."""
         if serial is None:
             raise RuntimeError("pyserial is not installed")
         super().__init__(daemon=True, name="pzem004t-reader")
@@ -104,7 +107,7 @@ class Pzem004tPowerSensor(threading.Thread):
         self._energy_wh: float | None = None
         self._frequency_hz: float | None = None
         self._power_factor: float | None = None
-        self._status = deque(maxlen=120)
+        self._status: deque[bool] = deque(maxlen=120)
         self._last_error: str | None = None
 
     @staticmethod
@@ -132,7 +135,9 @@ class Pzem004tPowerSensor(threading.Thread):
             raise ValueError("bad CRC")
 
         data = response[3:23]
-        regs = [int.from_bytes(data[i : i + 2], byteorder="big", signed=False) for i in range(0, 20, 2)]
+        regs = [
+            int.from_bytes(data[i : i + 2], byteorder="big", signed=False) for i in range(0, 20, 2)
+        ]
         voltage = regs[0] / 10.0
         current = ((regs[1] << 16) | regs[2]) / 1000.0
         power = ((regs[3] << 16) | regs[4]) / 10.0
@@ -167,10 +172,8 @@ class Pzem004tPowerSensor(threading.Thread):
 
     def _close_serial(self) -> None:
         if self._serial:
-            try:
+            with suppress(Exception):
                 self._serial.close()
-            except Exception:
-                pass
         self._serial = None
 
     def _poll_once(self) -> None:
@@ -195,6 +198,7 @@ class Pzem004tPowerSensor(threading.Thread):
         self._mark_status(True, None)
 
     def run(self) -> None:
+        """Poll the sensor until stop is requested, tracking failures in-memory."""
         while not self._stop_event.is_set():
             try:
                 self._poll_once()

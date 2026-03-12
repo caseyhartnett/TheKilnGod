@@ -48,6 +48,8 @@ def test_firing_record_writer_creates_csv_meta_and_summary(tmp_path: Path) -> No
         {
             "run_id": "run-12345",
             "profile": "cone-6-standard",
+            "reason_text": "Reached the end of the firing plan",
+            "reason_kind": "complete",
             "runtime_seconds": 3600.0,
             "runtime_hours": 1.0,
             "completed": True,
@@ -79,6 +81,8 @@ def test_firing_record_writer_creates_csv_meta_and_summary(tmp_path: Path) -> No
     assert rows[1]["temperature"] == "432.1"
     assert rows[1]["relay_on"] in {"True", "1"}
     assert rows[2]["reason"] == "schedule_complete"
+    assert rows[2]["reason_text"] == "Reached the end of the firing plan"
+    assert rows[2]["reason_kind"] == "complete"
     assert rows[2]["completed"] in {"True", "1"}
 
     meta_path = csv_path.with_suffix(".meta.json")
@@ -90,6 +94,7 @@ def test_firing_record_writer_creates_csv_meta_and_summary(tmp_path: Path) -> No
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert meta["run_id"] == "run-12345"
     assert summary["run_id"] == "run-12345"
+    assert summary["reason_text"] == "Reached the end of the firing plan"
 
 
 def test_disabled_writer_no_files(tmp_path: Path) -> None:
