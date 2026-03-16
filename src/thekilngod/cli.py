@@ -93,6 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     for name in [
         "thermocouple",
+        "thermocouple-diagnose",
         "output",
         "power",
         "buzzer",
@@ -141,6 +142,7 @@ def main() -> int:
     if ns.command == "test":
         mapping = {
             "thermocouple": "scripts/test_thermocouple.py",
+            "thermocouple-diagnose": "scripts/diagnose_thermocouple.py",
             "output": "scripts/test_output.py",
             "power": "scripts/test_power_sensor.py",
             "buzzer": "tests/hardware/test_buzzer.py",
