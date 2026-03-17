@@ -10,7 +10,11 @@ Run this on the Pi with the MAX31856 wired up.
 """
 
 import sys
+import os
 import time
+
+# Allow running directly with `python3 scripts/spi_wire_check.py` from repo root
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 try:
     import board
