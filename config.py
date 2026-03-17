@@ -153,12 +153,16 @@ currency_type   = "$"   # Currency Symbol to show when calculating cost to run j
 
 try:
     import board
-    # Temporary software SPI config to bypass Raspberry Pi hardware SPI
-    # while debugging all-zero thermocouple reads.
+    # Software SPI pin assignments (BCM numbering).
+    # NOTE: BCM 10 cannot be used for MOSI when dtparam=spi=on is active in
+    # /boot/firmware/config.txt because the kernel hardware SPI driver claims
+    # BCM 9, 10, and 11. adafruit_bitbangio cannot bit-bang a pin owned by the
+    # kernel driver, causing all SPI reads to return zero.
+    # MOSI is therefore on BCM 13 (physical pin 33) instead of BCM 10.
     spi_cs    = board.D27
     spi_sclk  = board.D22
     spi_miso  = board.D17
-    spi_mosi  = board.D10
+    spi_mosi  = board.D13
     gpio_heat = board.D16    #output that controls relay
     gpio_heat_invert = False #invert the output state
 
