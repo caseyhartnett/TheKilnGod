@@ -153,16 +153,21 @@ currency_type   = "$"   # Currency Symbol to show when calculating cost to run j
 
 try:
     import board
-    # Software SPI pin assignments (BCM numbering).
-    # NOTE: BCM 10 cannot be used for MOSI when dtparam=spi=on is active in
-    # /boot/firmware/config.txt because the kernel hardware SPI driver claims
-    # BCM 9, 10, and 11. adafruit_bitbangio cannot bit-bang a pin owned by the
-    # kernel driver, causing all SPI reads to return zero.
-    # MOSI is therefore on BCM 13 (physical pin 33) instead of BCM 10.
-    spi_cs    = board.D27
-    spi_sclk  = board.D22
-    spi_miso  = board.D17
-    spi_mosi  = board.D13
+    # Hardware SPI0 pin assignments.
+    # The kernel SPI driver (loaded by dtparam=spi=on in /boot/firmware/config.txt)
+    # owns BCM 8/9/10/11 and handles all clocking/data directly — no userspace
+    # GPIO bit-banging required.  Userspace GPIO on kernel 6.12 cannot reliably
+    # drive pins HIGH (lgpio/RPi.GPIO regression), so software SPI is unusable.
+    #
+    # Wire your MAX31856 breakout to these Pi header pins:
+    #   MAX31856 CS  → BCM  8  (physical pin 24)  ← hardware CE0, kernel-managed
+    #   MAX31856 SCK → BCM 11  (physical pin 23)  ← hardware SCLK
+    #   MAX31856 DO  → BCM  9  (physical pin 21)  ← hardware MISO
+    #   MAX31856 SDI → BCM 10  (physical pin 19)  ← hardware MOSI
+    #
+    # Omitting spi_sclk/spi_mosi/spi_miso tells the driver to use board.SPI()
+    # (hardware SPI) instead of adafruit_bitbangio software SPI.
+    spi_cs    = board.D8
     gpio_heat = board.D16    #output that controls relay
     gpio_heat_invert = False #invert the output state
 
