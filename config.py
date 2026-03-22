@@ -153,6 +153,15 @@ currency_type   = "$"   # Currency Symbol to show when calculating cost to run j
 
 try:
     import board
+    # Use kernel hardware SPI via spidev (/dev/spidevX.Y) instead of Blinka.
+    # Required on Pi OS kernel 6.12+ where userspace GPIO (lgpio/RPi.GPIO)
+    # cannot drive output pins HIGH, making software SPI non-functional.
+    # When True, no userspace GPIO is used for the thermocouple at all —
+    # the kernel SPI driver manages SCK/MOSI/MISO/CE entirely.
+    use_spidev    = True
+    spidev_bus    = 0   # matches /dev/spidev0.x
+    spidev_device = 0   # 0 = CE0 (BCM 8, physical pin 24)
+
     # Hardware SPI0 pin assignments.
     # The kernel SPI driver (loaded by dtparam=spi=on in /boot/firmware/config.txt)
     # owns BCM 8/9/10/11 and handles all clocking/data directly — no userspace

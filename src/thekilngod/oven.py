@@ -238,7 +238,9 @@ class RealBoard(Board):
 
         self.name = board.board_id
 
-    def choose_tempsensor(self) -> TempSensorReal | None:
+    def choose_tempsensor(self) -> TempSensorReal | Max31856Spidev | None:
+        if getattr(config, "use_spidev", False):
+            return Max31856Spidev()
         if config.max31855:
             return Max31855()
         if config.max31856:
@@ -551,6 +553,150 @@ class Max31856(TempSensorReal):
             if v:
                 raise Max31856_Error(k)
         return temp
+
+
+class Max31856Spidev(TempSensor):
+    """MAX31856 thermocouple reader using the kernel hardware SPI driver.
+
+    Communicates via /dev/spidevX.Y without any userspace GPIO, so it works
+    even when lgpio/RPi.GPIO cannot drive output pins (Pi OS kernel 6.12+
+    regression).  The kernel SPI driver controls SCK/MOSI/MISO and the
+    hardware chip-enable (CE0 = BCM 8) automatically.
+
+    Required wiring (hardware SPI0):
+        MAX31856 CS  → BCM  8 (pin 24)  hardware CE0, kernel-managed
+        MAX31856 SCK → BCM 11 (pin 23)  hardware SCLK
+        MAX31856 DO  → BCM  9 (pin 21)  hardware MISO
+        MAX31856 SDI → BCM 10 (pin 19)  hardware MOSI
+
+    Required: dtparam=spi=on in /boot/firmware/config.txt
+    Config:   use_spidev = True, spidev_bus = 0, spidev_device = 0
+    """
+
+    # MAX31856 register addresses
+    _REG_CR0   = 0x00
+    _REG_CR1   = 0x01
+    _REG_MASK  = 0x02
+    _REG_CJTH  = 0x0A
+    _REG_LTCBH = 0x0C
+    _REG_SR    = 0x0F
+
+    # CR0 bit masks
+    _CR0_CMODE    = 0x80  # continuous auto-convert mode
+    _CR0_OCFAULT0 = 0x10  # open-circuit detection (10 ms)
+    _CR0_50HZ     = 0x01  # 50 Hz noise rejection (default 60 Hz)
+
+    def __init__(self) -> None:
+        TempSensor.__init__(self)
+        self.sleeptime = self.time_step / float(config.temperature_average_samples)
+        self.temptracker = TempTracker()
+
+        import spidev
+
+        bus = int(getattr(config, "spidev_bus", 0))
+        device = int(getattr(config, "spidev_device", 0))
+        self._spi = spidev.SpiDev()
+        self._spi.open(bus, device)
+        self._spi.max_speed_hz = 500000
+        self._spi.mode = 1          # CPOL=0, CPHA=1 — MAX31856 requirement
+        self._spi.lsbfirst = False
+        self._configure()
+        log.info(
+            "MAX31856 via spidev (/dev/spidev%d.%d, hardware CE%d) initialized",
+            bus,
+            device,
+            device,
+        )
+
+    def _write(self, reg: int, value: int) -> None:
+        self._spi.xfer2([0x80 | reg, value])
+
+    def _read(self, start_reg: int, count: int) -> list:
+        data = self._spi.xfer2([start_reg & 0x7F] + [0x00] * count)
+        return data[1:]
+
+    def _configure(self) -> None:
+        cr0 = self._CR0_CMODE | self._CR0_OCFAULT0
+        if getattr(config, "ac_freq_50hz", False):
+            cr0 |= self._CR0_50HZ
+        self._write(self._REG_CR0, cr0)
+
+        # Thermocouple type stored as IntEnum (B=0…T=7); default K=3
+        tc_type = getattr(config, "thermocouple_type", None)
+        cr1 = (int(tc_type) & 0x07) if tc_type is not None else 0x03
+        self._write(self._REG_CR1, cr1)
+
+        self._write(self._REG_MASK, 0x00)  # enable all fault interrupts
+
+    @property
+    def _probe_temp_c(self) -> float:
+        regs = self._read(self._REG_LTCBH, 3)
+        raw = (regs[0] << 16 | regs[1] << 8 | regs[2]) >> 5
+        if raw & 0x40000:   # sign-extend 19-bit value
+            raw -= 0x80000
+        return raw * 0.0078125  # 1/128 °C per LSB
+
+    @property
+    def _reference_temp_c(self) -> float:
+        regs = self._read(self._REG_CJTH, 2)
+        raw = (regs[0] << 8 | regs[1]) >> 2
+        if raw & 0x2000:    # sign-extend 14-bit value
+            raw -= 0x4000
+        return raw * 0.015625   # 1/64 °C per LSB
+
+    @property
+    def _fault_status(self) -> dict:
+        sr = self._read(self._REG_SR, 1)[0]
+        return {
+            "cj_range": bool(sr & 0x80),
+            "tc_range": bool(sr & 0x40),
+            "cj_high":  bool(sr & 0x20),
+            "cj_low":   bool(sr & 0x10),
+            "tc_high":  bool(sr & 0x08),
+            "tc_low":   bool(sr & 0x04),
+            "voltage":  bool(sr & 0x02),
+            "open_tc":  bool(sr & 0x01),
+        }
+
+    def raw_temp(self) -> float:
+        probe_c = self._probe_temp_c
+        ref_c   = self._reference_temp_c
+        faults  = self._fault_status
+
+        if probe_c == 0.0 and ref_c == 0.0 and not any(faults.values()):
+            raise Max31856_Error("communication_failure")
+
+        for key, active in faults.items():
+            if active:
+                raise Max31856_Error(key)
+
+        return probe_c
+
+    def get_temperature(self) -> float | None:
+        try:
+            temp = self.raw_temp()
+            if config.temp_scale.lower() == "f":
+                temp = (temp * 9 / 5) + 32
+            self.status.good()
+            return temp
+        except ThermocoupleError as tce:
+            if tce.ignore:
+                log.error("Problem reading temp (ignored) %s", tce.message)
+                self.status.good()
+            else:
+                log.error("Problem reading temp %s", tce.message)
+                self.status.bad()
+        return None
+
+    def temperature(self) -> float:
+        return self.temptracker.get_avg_temp()
+
+    def run(self) -> None:
+        while True:
+            temp = self.get_temperature()
+            if temp is not None:
+                self.temptracker.add(temp)
+            time.sleep(self.sleeptime)
 
 
 class Oven(threading.Thread):

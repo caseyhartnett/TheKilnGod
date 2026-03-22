@@ -24,6 +24,7 @@ dependencies = [
   "Pillow",
   "pyserial",
   "paho-mqtt",
+  "spidev; platform_system == 'Linux' and (platform_machine == 'armv7l' or platform_machine == 'aarch64')",
 ]
 
 [project.optional-dependencies]
